@@ -139,6 +139,10 @@ by squeezing it. If AgentsPoppy is useful to you, you can
 [**sponsor the project**](https://github.com/sponsors/leonct74) — entirely optional. Contributing
 extensions, code, or feedback helps just as much.
 
+<p align="center">
+  <a href="https://github.com/sponsors/leonct74"><img src="https://img.shields.io/badge/%E2%9D%A4_Sponsor_this_project-EA4AAA?style=for-the-badge&logo=githubsponsors&logoColor=white" alt="Sponsor AgentsPoppy on GitHub Sponsors"></a>
+</p>
+
 ## Links
 
 Poppies built on AgentsPoppy — each one runs entirely in your own AWS account:
