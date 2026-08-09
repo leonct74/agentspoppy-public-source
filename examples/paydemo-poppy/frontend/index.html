@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PaydemoPoppy</title>
+    <style>
+      body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 32px; color: #1a1712; background: #faf7f2; }
+      h1 { font-size: 22px; margin: 0 0 4px; }
+      .sub { color: #8f8a80; margin: 0 0 24px; }
+      .card { border: 1px solid #e6e0d7; border-radius: 12px; padding: 20px; background: #fff; max-width: 480px; }
+      .feature { margin-top: 16px; padding: 16px; border-radius: 10px; background: #f5f0ea; color: #8f8a80; }
+      .feature.unlocked { background: #eaf6ea; color: #2f8f4e; }
+      .row { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 16px; }
+    </style>
+  </head>
+  <body>
+    <h1>PaydemoPoppy</h1>
+    <p class="sub">A demo of the standard AgentsPoppy in-app purchase button.</p>
+    <div class="card">
+      <p>This poppy is free to use. The <b>Pro feature</b> below is locked until you buy it — right here, through AgentsPoppy.</p>
+      <div class="row">
+        <span>Unlock the Pro feature</span>
+        <!-- The standard AgentsPoppy Buy button. `product` must match a product you priced in the
+             developer dashboard. Add a `target` to scope the purchase to a specific instance/user and
+             unlock it from your OWN other app (e.g. a mobile client) — the cross-app pattern:
+               <agentspoppy-purchase product="domain-access" target="acme.com"></agentspoppy-purchase>
+             then your app's backend checks:
+               GET https://agentspoppy.com/api/entitlement?poppyId=com.agentspoppy.paydemo&productId=domain-access&target=acme.com
+             See packages/extension-sdk/README.md §4 + docs/IN_APP_PURCHASES.md. -->
+        <agentspoppy-purchase product="pro"></agentspoppy-purchase>
+      </div>
+      <div id="feature" class="feature">🔒 Pro feature is locked — buy it to unlock.</div>
+    </div>
+    <script src="app.js"></script>
+  </body>
+</html>

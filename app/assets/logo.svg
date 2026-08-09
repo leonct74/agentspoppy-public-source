@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- AgentsPoppy logo — the poppy from the website's living field, distilled.
+       Two rings of layered petals, a deep seed centre, a ring of stamens.
+       Every poppy is someone's own cloud. -->
+  <g transform="translate(256 256) rotate(-8)">
+    <!-- back petal ring -->
+    <g fill="#c33322">
+      <ellipse cx="0" cy="-118" rx="118" ry="92" transform="rotate(90)"/>
+      <ellipse cx="0" cy="-118" rx="118" ry="92" transform="rotate(162)"/>
+      <ellipse cx="0" cy="-118" rx="118" ry="92" transform="rotate(234)"/>
+      <ellipse cx="0" cy="-118" rx="118" ry="92" transform="rotate(306)"/>
+      <ellipse cx="0" cy="-118" rx="118" ry="92" transform="rotate(18)"/>
+    </g>
+    <!-- front petal ring, offset half a step, warmer -->
+    <g>
+      <ellipse cx="0" cy="-98" rx="104" ry="80" transform="rotate(54)"  fill="#e8603f"/>
+      <ellipse cx="0" cy="-98" rx="104" ry="80" transform="rotate(126)" fill="#d8412c"/>
+      <ellipse cx="0" cy="-98" rx="104" ry="80" transform="rotate(198)" fill="#e8603f"/>
+      <ellipse cx="0" cy="-98" rx="104" ry="80" transform="rotate(270)" fill="#f0755a"/>
+      <ellipse cx="0" cy="-98" rx="104" ry="80" transform="rotate(342)" fill="#d8412c"/>
+    </g>
+    <!-- heart of the flower -->
+    <circle r="86" fill="#b52d1e"/>
+    <circle r="46" fill="#241b22"/>
+    <!-- stamens -->
+    <g fill="#3a2c33">
+      <circle cx="0"   cy="-60" r="7"/>
+      <circle cx="52"  cy="-30" r="7"/>
+      <circle cx="52"  cy="30"  r="7"/>
+      <circle cx="0"   cy="60"  r="7"/>
+      <circle cx="-52" cy="30"  r="7"/>
+      <circle cx="-52" cy="-30" r="7"/>
+    </g>
+    <circle r="18" fill="#4a353d"/>
+  </g>
+</svg>

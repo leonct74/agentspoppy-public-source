@@ -1,0 +1,18 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Core capability for the main window. The broker is spawned from Rust (not over IPC), so no shell permissions are exposed to the webview. `core:window:allow-show` lets the frontend reveal the window once it has painted; the window launches hidden to avoid a blank-webview flash. `core:window:allow-request-user-attention` + `core:window:allow-unminimize` let it bounce the dock (and restore from minimised) when a supervised approval lands, so the user is drawn to the in-app approvals bar even when their notification banners aren't configured to show action buttons (macOS only renders those in the 'Alerts' style, which an app can't set). `opener:default` lets the webview hand AWS console URLs to the system browser. `notification:default` lets it post native OS banners for pending supervised-approval requests while the window is hidden. `updater:default` + `process:allow-restart` power the user-confirmed self-update (check → download+install → relaunch).",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "core:window:allow-show",
+    "core:window:allow-request-user-attention",
+    "core:window:allow-unminimize",
+    "notification:default",
+    "updater:default",
+    "process:allow-restart"
+  ]
+}

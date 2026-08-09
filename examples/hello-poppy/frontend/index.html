@@ -1,0 +1,81 @@
+<!doctype html>
+<!--
+  Hello Poppy — the minimal AgentsPoppy extension FRONTEND.
+
+  This is a no-build static page: the host serves this folder and renders it in a
+  sandboxed iframe. It has no Node, no AWS SDK, and no direct network to AWS — it reaches
+  anything privileged only through the host bridge (see app.js), gated by the
+  `capabilities` declared in ../extension.json.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hello Poppy</title>
+    <style>
+      /* Match the host look: dark navy surfaces, 1px borders, crimson used sparingly,
+         Inter for UI + a monospace for technical strings (ARNs, IDs, JSON). */
+      :root {
+        --bg: #0b1120;
+        --panel: #131c30;
+        --panel-2: #1b2742;
+        --border: #26324f;
+        --text: #eef2fb;
+        --muted: #93a0bd;
+        --primary: #b9c7e3;
+        --crimson: #e23c5a;
+        --ok: #36c08a;
+        --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
+        --ui: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; padding: 20px; background: var(--bg); color: var(--text);
+        font-family: var(--ui); -webkit-font-smoothing: antialiased; line-height: 1.5;
+      }
+      h1 { font-size: 20px; margin: 0 0 2px; letter-spacing: -0.01em; }
+      .sub { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
+      .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; }
+      .panel h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 10px; }
+      .row { display: flex; gap: 8px; align-items: baseline; font-size: 13px; }
+      .row .k { color: var(--muted); min-width: 92px; }
+      .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--border); }
+      .pill.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+      .grant { border-top: 1px solid var(--border); padding: 8px 0; font-size: 13px; }
+      .grant:first-child { border-top: none; }
+      .grant .svc { font-weight: 600; }
+      .grant .scope { font-family: var(--mono); font-size: 12px; color: var(--muted); word-break: break-all; }
+      .btns { display: flex; flex-wrap: wrap; gap: 8px; }
+      button {
+        background: var(--primary); color: #233147; border: 1px solid var(--primary);
+        border-radius: 8px; padding: 7px 13px; font-size: 13px; font-weight: 600; cursor: pointer;
+      }
+      button.ghost { background: var(--panel-2); color: var(--text); border-color: var(--border); font-weight: 500; }
+      button:hover { filter: brightness(1.08); }
+      pre { font-family: var(--mono); font-size: 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 11px; margin: 10px 0 0; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
+      .muted { color: var(--muted); }
+      a { color: var(--primary); }
+    </style>
+  </head>
+  <body>
+    <h1>Hello Poppy</h1>
+    <p class="sub">A minimal extension running inside AgentsPoppy. Edit this folder to make it yours.</p>
+
+    <div class="panel" id="connection-panel">
+      <h2>This extension's connection</h2>
+      <div id="connection" class="muted">Loading…</div>
+    </div>
+
+    <div class="panel">
+      <h2>Try the host bridge</h2>
+      <div class="btns">
+        <button id="btn-backend">Call its backend</button>
+        <button id="btn-open" class="ghost">Open AWS docs</button>
+        <button id="btn-notify" class="ghost">Send a notification</button>
+      </div>
+      <pre id="output" class="muted">Output appears here.</pre>
+    </div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

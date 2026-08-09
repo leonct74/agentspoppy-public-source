@@ -1,0 +1,58 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "AgentsPoppy",
+  "version": "0.3.0",
+  "identifier": "com.agentspoppy.desktop",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1430",
+    "beforeDevCommand": "npm run build:broker && npm run dev",
+    "beforeBuildCommand": "npm run build:broker && npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "AgentsPoppy",
+        "width": 1000,
+        "height": 720,
+        "minWidth": 820,
+        "minHeight": 560,
+        "visible": false,
+        "backgroundColor": "#0d1424"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app",
+      "dmg"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "externalBin": [
+      "binaries/agentspoppy-broker"
+    ],
+    "macOS": {
+      "entitlements": "entitlements.plist"
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/leonct74/agentspoppy-releases/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDM5RTVFRjVBMzdGRkM1QUYKUldTdnhmODNXdS9sT1pMOUZ6WTI2WEtHTFlHZFpwNnRWejJUTEZzMExhM2djM3JDeW13N3g3SXAK"
+    }
+  }
+}

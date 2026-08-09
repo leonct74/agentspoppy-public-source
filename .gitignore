@@ -1,0 +1,20 @@
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+.DS_Store
+# env / secrets
+.env
+.env.*
+# Tauri
+**/src-tauri/target/
+**/src-tauri/gen/
+# Bundled broker binary (build artifact, produced by build:broker)
+**/src-tauri/binaries/
+# Claude Code local config
+# .claude is tracked selectively: the mechanism guard MUST ship with the repo
+# (docs/SECURITY_MECHANISM.md §5); local approval state and scratch stay out.
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
+!.claude/.gitignore

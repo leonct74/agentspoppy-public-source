@@ -1,0 +1,75 @@
+# Linux port, step 1: prove the container + broker compile and RUN on
+# linux-x64, and produce an AppImage — the same CI-as-build-machine pattern
+# as windows-build.yml (no Linux hardware locally).
+#
+# Same non-negotiable lesson (macOS v0.2.0): a build that compiles is not a
+# build that works — the broker smoke test below is the gate that matters.
+# The AppImage is built WITH the updater signature so Linux installs get the
+# in-app "Update & restart" banner from day one (there's no Linux app store
+# channel doing it for us).
+name: linux-build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+
+      - name: Install Tauri Linux system dependencies (WebKitGTK et al.)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libgtk-3-dev
+
+      - name: Install workspace dependencies
+        run: npm ci
+
+      - name: Build broker (linux-x64 Node SEA)
+        run: npm run build:broker -w @agentspoppy/app
+
+      - name: Smoke-test the broker binary (must start and answer HTTP)
+        run: |
+          BROKER=app/src-tauri/binaries/agentspoppy-broker-x86_64-unknown-linux-gnu
+          ls -la app/src-tauri/binaries/
+          AGENTSPOPPY_PORT=8977 "$BROKER" > broker-smoke.log 2>&1 &
+          BPID=$!
+          sleep 5
+          if ! kill -0 $BPID 2>/dev/null; then
+            echo "❌ broker died during startup"; cat broker-smoke.log; exit 1
+          fi
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8977/accounts || echo "000")
+          echo "broker HTTP status: $CODE (401 = alive + auth working)"
+          cat broker-smoke.log
+          kill $BPID 2>/dev/null || true
+          [ "$CODE" != "000" ] || { echo "❌ broker never answered HTTP"; exit 1; }
+
+      - name: Build frontend
+        run: npm run build -w @agentspoppy/app
+
+      - name: Tauri build (AppImage + signed updater artifact)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        run: npm run tauri -w @agentspoppy/app -- build --bundles appimage
+
+      - name: Upload AppImage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AgentsPoppy-linux-x64
+          path: |
+            app/src-tauri/target/release/bundle/appimage/*.AppImage
+            app/src-tauri/target/release/bundle/appimage/*.sig
+          retention-days: 14

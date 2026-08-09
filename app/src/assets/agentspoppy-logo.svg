@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- AgentsPoppy mark — the monoline poppy: orange lines only, no fills.
+       Four overlapping petal outlines around a stamen ring. -->
+  <g fill="none" stroke="#e8603f" stroke-width="20" stroke-linecap="round" stroke-linejoin="round" transform="translate(256 256) rotate(-10)">
+    <!-- four petal outlines -->
+    <g id="petal">
+      <path d="M 0 -52 C -66 -74, -92 -152, -54 -196 C -22 -232, 22 -232, 54 -196 C 92 -152, 66 -74, 0 -52 Z"/>
+    </g>
+    <path d="M 0 -52 C -66 -74, -92 -152, -54 -196 C -22 -232, 22 -232, 54 -196 C 92 -152, 66 -74, 0 -52 Z" transform="rotate(90)"/>
+    <path d="M 0 -52 C -66 -74, -92 -152, -54 -196 C -22 -232, 22 -232, 54 -196 C 92 -152, 66 -74, 0 -52 Z" transform="rotate(180)"/>
+    <path d="M 0 -52 C -66 -74, -92 -152, -54 -196 C -22 -232, 22 -232, 54 -196 C 92 -152, 66 -74, 0 -52 Z" transform="rotate(270)"/>
+    <!-- stamen ring -->
+    <circle r="30" stroke-width="18"/>
+    <g stroke-width="14">
+      <line x1="40" y1="-40" x2="56" y2="-56"/>
+      <line x1="40" y1="40" x2="56" y2="56"/>
+      <line x1="-40" y1="40" x2="-56" y2="56"/>
+      <line x1="-40" y1="-40" x2="-56" y2="-56"/>
+    </g>
+  </g>
+</svg>

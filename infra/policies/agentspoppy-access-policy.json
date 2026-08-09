@@ -1,0 +1,132 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "WhoAmI",
+      "Effect": "Allow",
+      "Action": ["sts:GetCallerIdentity"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DeployBootstrapStack",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:CreateStack",
+        "cloudformation:UpdateStack",
+        "cloudformation:DeleteStack",
+        "cloudformation:DescribeStacks",
+        "cloudformation:DescribeStackEvents",
+        "cloudformation:DescribeStackResources",
+        "cloudformation:ListStackResources",
+        "cloudformation:GetTemplate",
+        "cloudformation:CreateChangeSet",
+        "cloudformation:DescribeChangeSet",
+        "cloudformation:ExecuteChangeSet",
+        "cloudformation:DeleteChangeSet",
+        "cloudformation:TagResource"
+      ],
+      "Resource": "arn:aws:cloudformation:*:*:stack/AgentsPoppy/*"
+    },
+    {
+      "Sid": "ValidateTemplate",
+      "Effect": "Allow",
+      "Action": ["cloudformation:ValidateTemplate", "cloudformation:GetTemplateSummary"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CreateBrokerRole",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole",
+        "iam:DeleteRole",
+        "iam:GetRole",
+        "iam:UpdateRole",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:TagRole",
+        "iam:UntagRole",
+        "iam:PutRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:GetRolePolicy",
+        "iam:ListRolePolicies",
+        "iam:ListAttachedRolePolicies"
+      ],
+      "Resource": "arn:aws:iam::*:role/AgentsPoppyBroker"
+    },
+    {
+      "Sid": "CreateOperatorUser",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateUser",
+        "iam:DeleteUser",
+        "iam:GetUser",
+        "iam:TagUser",
+        "iam:UntagUser",
+        "iam:PutUserPolicy",
+        "iam:DeleteUserPolicy",
+        "iam:GetUserPolicy",
+        "iam:ListUserPolicies",
+        "iam:ListAttachedUserPolicies"
+      ],
+      "Resource": "arn:aws:iam::*:user/AgentsPoppyOperator"
+    },
+    {
+      "Sid": "CreateOperatorAccessKey",
+      "Effect": "Allow",
+      "Action": ["iam:CreateAccessKey", "iam:ListAccessKeys", "iam:DeleteAccessKey"],
+      "Resource": "arn:aws:iam::*:user/AgentsPoppyOperator"
+    },
+    {
+      "Sid": "AssumeBrokerRole",
+      "Effect": "Allow",
+      "Action": ["sts:AssumeRole"],
+      "Resource": "arn:aws:iam::*:role/AgentsPoppyBroker"
+    },
+    {
+      "Sid": "MonitorAndTeardown",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:ListStacks",
+        "cloudformation:DescribeStacks",
+        "cloudformation:DescribeStackResources",
+        "cloudformation:ListStackResources",
+        "cloudformation:GetTemplate",
+        "cloudformation:DeleteStack",
+        "tag:GetResources",
+        "cloudtrail:LookupEvents"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "HostResidualCleanup",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetBucketTagging",
+        "s3:ListBucketVersions",
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion",
+        "s3:DeleteBucket",
+        "dynamodb:ListTagsOfResource",
+        "dynamodb:UpdateTable",
+        "dynamodb:DeleteTable",
+        "cognito-idp:ListTagsForResource",
+        "cognito-idp:DescribeUserPool",
+        "cognito-idp:DeleteUserPoolDomain",
+        "cognito-idp:DeleteUserPool",
+        "lambda:ListTags",
+        "lambda:DeleteFunction",
+        "logs:ListTagsForResource",
+        "logs:DeleteLogGroup",
+        "ses:DeleteIdentity",
+        "ses:DescribeActiveReceiptRuleSet",
+        "ses:SetActiveReceiptRuleSet",
+        "ses:DeleteReceiptRuleSet",
+        "events:ListTagsForResource",
+        "events:DescribeRule",
+        "events:ListTargetsByRule",
+        "events:RemoveTargets",
+        "events:DeleteRule"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

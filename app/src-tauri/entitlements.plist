@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!-- The broker externalBin is a Node.js SEA binary: V8 requires JIT-writable
+     memory, which the hardened runtime (mandatory for notarization) forbids
+     without these entitlements. Without them the broker dies at startup in
+     v8::internal::ThreadIsolation::Initialize (pthread_jit_write_protect_np,
+     SIGTRAP) — the exact 0.2.0 crash. Same pair every Electron/Node app ships. -->
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+</dict>
+</plist>

@@ -1,0 +1,47 @@
+{
+  "name": "@agentspoppy/app",
+  "license": "SEE LICENSE IN LICENSE",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:broker": "node scripts/build-broker.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:dev:clean": "pkill -9 -f 'target/debug/agentspoppy' 2>/dev/null; rm -rf \"$HOME/Library/Caches/agentspoppy\" \"$HOME/Library/WebKit/agentspoppy\" \"$HOME/Library/HTTPStorages/agentspoppy\"; tauri dev",
+    "tauri:build": "tauri build",
+    "verify:bundle": "node scripts/verify-bundle.mjs",
+    "release:check": "node scripts/release-check.mjs",
+    "release:check:live": "node scripts/release-check.mjs --live"
+  },
+  "dependencies": {
+    "@agentspoppy/core": "*",
+    "@agentspoppy/extension-sdk": "*",
+    "@fontsource-variable/inter": "^5.2.8",
+    "@fontsource-variable/jetbrains-mono": "^5.2.8",
+    "@tauri-apps/api": "^2.1.1",
+    "@tauri-apps/plugin-notification": "^2.3.3",
+    "@tauri-apps/plugin-opener": "^2.5.4",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.10.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.1.0",
+    "@testing-library/react": "^14.3.1",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "esbuild": "^0.24.0",
+    "jsdom": "^25.0.1",
+    "postject": "^1.0.0-alpha.6",
+    "typescript": "^5.6.0",
+    "vite": "^5.4.11",
+    "vitest": "^2.1.0"
+  }
+}

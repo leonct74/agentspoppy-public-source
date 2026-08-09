@@ -1,0 +1,25 @@
+{
+  "id": "com.agentspoppy.paydemo",
+  "name": "PaydemoPoppy",
+  "version": "0.1.0",
+  "description": "A tiny frontend-only poppy that demonstrates the standard AgentsPoppy in-app purchase button — buy a product, and a locked feature unlocks.",
+  "icon": "frontend/icon.svg",
+  "permissionSet": {
+    "id": "paydemo",
+    "name": "PaydemoPoppy",
+    "description": "Read-only identity check (sts:GetCallerIdentity). This demo only shows the in-app purchase button; it makes no cloud changes.",
+    "requiredTags": ["agentspoppy:connection"],
+    "grants": [
+      {
+        "service": "sts",
+        "actions": ["GetCallerIdentity"],
+        "resourceScope": "*"
+      }
+    ],
+    "limits": null
+  },
+  "frontend": {
+    "entry": "frontend/index.html"
+  },
+  "capabilities": ["commerce:purchase"]
+}

@@ -1,0 +1,71 @@
+# Windows port, step 1: prove the container + broker compile and RUN on
+# win32-x64 — no Windows hardware locally, so CI is the build machine.
+# Manual trigger while the port is in progress; producing the Store-ready
+# MSIX and the signed pipeline comes after this is green.
+#
+# The one lesson this workflow must never forget (macOS v0.2.0): a build that
+# compiles and signs is not a build that works — the broker smoke test below
+# is the gate that matters.
+name: windows-build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+
+      - name: Install workspace dependencies
+        run: npm ci
+
+      - name: Build broker (win32-x64 Node SEA)
+        run: npm run build:broker -w @agentspoppy/app
+
+      - name: Smoke-test the broker binary (must start and answer HTTP)
+        run: |
+          BROKER=app/src-tauri/binaries/agentspoppy-broker-x86_64-pc-windows-msvc.exe
+          ls -la app/src-tauri/binaries/
+          AGENTSPOPPY_PORT=8977 "$BROKER" > broker-smoke.log 2>&1 &
+          BPID=$!
+          sleep 5
+          if ! kill -0 $BPID 2>/dev/null; then
+            echo "❌ broker died during startup"; cat broker-smoke.log; exit 1
+          fi
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8977/accounts || echo "000")
+          echo "broker HTTP status: $CODE (401 = alive + auth working)"
+          cat broker-smoke.log
+          kill $BPID 2>/dev/null || true
+          [ "$CODE" != "000" ] || { echo "❌ broker never answered HTTP"; exit 1; }
+
+      - name: Build frontend
+        run: npm run build -w @agentspoppy/app
+
+      - name: Tauri build (unsigned, NSIS installer + signed updater artifact)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        run: npm run tauri -w @agentspoppy/app -- build --bundles nsis
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AgentsPoppy-windows-x64-unsigned
+          path: |
+            app/src-tauri/target/release/bundle/nsis/*.exe
+            app/src-tauri/target/release/bundle/nsis/*.sig
+          retention-days: 14

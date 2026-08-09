@@ -1,0 +1,39 @@
+{
+  "id": "com.example.hello-poppy",
+  "name": "Hello Poppy",
+  "version": "0.1.0",
+  "description": "A minimal AgentsPoppy extension \u2014 the clone-and-go starting point.",
+  "icon": "frontend/icon.svg",
+  "bugsUrl": "https://github.com/leonct74/agentspoppy/issues",
+  "permissionSet": {
+    "id": "hello-poppy",
+    "name": "Hello Poppy backend",
+    "description": "Reads its own caller identity. Replace these grants with the AWS access YOUR extension needs (least-privilege, scoped to its own resources).",
+    "requiredTags": [
+      "agentspoppy:connection"
+    ],
+    "grants": [
+      {
+        "service": "sts",
+        "actions": [
+          "GetCallerIdentity"
+        ],
+        "resourceScope": "*"
+      }
+    ],
+    "limits": null
+  },
+  "frontend": {
+    "entry": "frontend/index.html"
+  },
+  "backend": {
+    "entry": "backend/server.mjs",
+    "transport": "http"
+  },
+  "capabilities": [
+    "connection:read",
+    "backend:invoke",
+    "host:openExternal",
+    "host:notify"
+  ]
+}

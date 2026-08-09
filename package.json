@@ -1,0 +1,28 @@
+{
+  "name": "agentspoppy",
+  "version": "0.0.0",
+  "private": true,
+  "description": "AgentsPoppy: the open, local-first permission broker for your own AWS. Apps and agents connect with a user-approved scope; AgentsPoppy holds the credentials locally, tracks what each app builds in the cloud, and lets you pause it or tear it down.",
+  "license": "SEE LICENSE IN LICENSE",
+  "workspaces": [
+    "packages/*",
+    "app"
+  ],
+  "scripts": {
+    "typecheck": "tsc -b packages/core packages/extension-sdk packages/broker packages/client && npm run typecheck -w @agentspoppy/app",
+    "test": "npm run test --workspaces --if-present",
+    "broker": "npm run serve -w @agentspoppy/broker",
+    "broker:seed": "npm run serve -w @agentspoppy/broker -- --seed",
+    "app": "npm run dev -w @agentspoppy/app",
+    "demo:poppy": "node scripts/demo-poppy.mjs",
+    "validate-manifest": "tsx scripts/validate-manifest.ts",
+    "certify": "tsx scripts/certify.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
