@@ -102,7 +102,7 @@ tauri:build` produces the installable `.app`/`.dmg`. (The first Rust build takes
 
 ## License
 
-Source-available under the **[PolyForm Perimeter License 1.0.0](https://polyformproject.org/licenses/perimeter/1.0.0/)** —
+Source-available under the **[PolyForm Perimeter License 1.0.0](https://polyformproject.org/licenses/perimeter)** —
 read, run, modify and self-host it for any purpose **except** offering a product that competes
 with AgentsPoppy. See [`LICENSE`](./LICENSE).
 
