@@ -50,6 +50,10 @@ account — is the subject of a **pending patent application** by Marco Tomasell
 source does not waive those rights: the code is source-available under the [license](./LICENSE),
 and the patent application covers the underlying mechanism.
 
+A patent and a non-compete licence on an otherwise open project deserve a reason, not just a
+notice. Ours is in **[section VI of the Manifesto](./MANIFESTO.md#vi-why-theres-a-patent-and-a-licence-with-teeth)**:
+what's worth protecting here isn't the code, it's the rules that make it trustworthy.
+
 ## Local-first — a hard boundary
 
 Your AWS credentials live on **your** machine and never leave it. There is **no server** that
@@ -111,6 +115,9 @@ The **AgentsPoppy** and **Poppy** names and logos are trademarks — see
 
 ## Docs
 
+- [`MANIFESTO.md`](./MANIFESTO.md) — what we're for and what we refuse: who the cloud belongs to,
+  how this is paid for without your data, and why an open project carries a patent and a
+  non-compete licence.
 - [`AGENTS.md`](./AGENTS.md) — **building an extension** (a "poppy"): the guide for coding agents —
   the manifest, capabilities, the security rules, and the build/install/run loop.
 - [`docs/STARTER_PROMPT.md`](./docs/STARTER_PROMPT.md) — a **copy-paste prompt** to hand your coding
