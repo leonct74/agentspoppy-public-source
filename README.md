@@ -137,4 +137,12 @@ extensions, code, or feedback helps just as much.
 
 ## Links
 
-- [MailPoppy](https://mailpoppy.com) — the first app being built on AgentsPoppy.
+Poppies built on AgentsPoppy — each one runs entirely in your own AWS account:
+
+- [MailPoppy](https://mailpoppy.com) — your own private email, in your own cloud. The first app built on AgentsPoppy.
+- [CrewPoppy](https://crewpoppy.com) — the Crew HQ for your AI crew.
+- [TrafficPoppy](https://trafficpoppy.agentspoppy.com) — privacy-first web analytics.
+- [VPN-Poppy](https://agentspoppy.com/poppies/vpn-poppy) — a personal WireGuard VPN, on the fly.
+- [VM-Poppy](https://agentspoppy.com/poppies/vm-poppy) — throwaway Linux & Windows VMs.
+
+Coming in a few days: **LiveOpsPoppy**.

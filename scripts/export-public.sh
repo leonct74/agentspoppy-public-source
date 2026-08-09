@@ -1,0 +1,146 @@
+#!/bin/bash
+# Export the PUBLIC mirror of the AgentsPoppy repo.
+#
+# THIS repo is PRIVATE and canonical, forever. Its visibility must NEVER be
+# changed — its history contains identifiers and working state that were never
+# meant to be published. The public repo is produced ONLY by this script: a
+# WHITELIST of paths, exported from committed HEAD (never the working tree,
+# never gitignored files), into a staging repo whose history is just the sync
+# commits. Nothing private can leak by default — a new top-level file stays
+# private unless someone adds it to PUBLIC_PATHS on purpose.
+#
+#   scripts/export-public.sh <staging-dir>            # export + verify only
+#   scripts/export-public.sh <staging-dir> <remote>   # …then commit & push
+#
+# Sibling implementation: mailpoppy/scripts/export-public.sh (same model; that
+# one also excludes whole private apps, which AgentsPoppy has none of).
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+# ---- The whitelist. Everything else stays private. --------------------------
+# AgentsPoppy is meant to be public in full, so this is currently the entire
+# tracked tree. It is still an explicit list: anything added later is private
+# until someone deliberately publishes it.
+PUBLIC_PATHS=(
+  LICENSE
+  NOTICE
+  README.md
+  TRADEMARK.md
+  AGENTS.md
+  CLAUDE.md
+  .gitignore
+  .github
+  .claude
+  package.json
+  package-lock.json
+  tsconfig.base.json
+  app
+  brand
+  docs
+  examples
+  infra
+  packages
+  scripts
+)
+
+# Paths that must NEVER appear, even if a whitelist entry grows to cover them.
+FORBIDDEN=(
+  node_modules
+  .env
+  .claude/mechanism-approval
+  scripts/export-denylist.txt
+)
+
+# Literal strings that must never reach the mirror. They live in a SEPARATE
+# file that is deleted from the export before the gates run — holding them in
+# this script would publish the very identifiers the gate suppresses, since
+# this script is itself exported. (The first sync attempt failed on exactly
+# that, which is the gate working.)
+DENYLIST_FILE="scripts/export-denylist.txt"
+FORBIDDEN_STRINGS=()
+if [ -f "$DENYLIST_FILE" ]; then
+  while IFS= read -r line; do
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    FORBIDDEN_STRINGS+=("$line")
+  done < "$DENYLIST_FILE"
+fi
+
+# AWS account ids that are allowed to appear (documentation/reserved values).
+# 111122223333 and 123456789012 are AWS's own doc placeholders.
+ALLOWED_ACCOUNTS="123456789012|111122223333|000000000000|999999999999|111111111111"
+
+STAGING="${1:?usage: export-public.sh <staging-dir> [push-remote-url]}"
+REMOTE="${2:-}"
+
+if ! git diff-index --quiet HEAD --; then
+  echo "note: working tree has uncommitted changes — exporting committed HEAD only." >&2
+fi
+SRC_SHA=$(git rev-parse --short HEAD)
+
+mkdir -p "$STAGING"
+if [ ! -d "$STAGING/.git" ]; then
+  git -C "$STAGING" init -q -b main
+fi
+
+# Replace the staging contents with the export (keep .git so syncs accumulate as
+# commits). git archive exports committed blobs only — never the working tree.
+find "$STAGING" -mindepth 1 -maxdepth 1 -not -name .git -exec rm -rf {} +
+git archive HEAD -- "${PUBLIC_PATHS[@]}" | tar -x -C "$STAGING"
+
+# The denylist is whitelisted-in by `scripts/`, so drop it before the gates run.
+# It must never be published: it IS the list of things we're hiding.
+rm -f "$STAGING/$DENYLIST_FILE"
+
+# ---- Safety gates -----------------------------------------------------------
+fail() { echo "FATAL: $1 — aborting, nothing pushed." >&2; exit 1; }
+
+for p in "${FORBIDDEN[@]}"; do
+  [ -e "$STAGING/$p" ] && fail "forbidden path '$p' appeared in the export"
+done
+
+for s in "${FORBIDDEN_STRINGS[@]}"; do
+  if grep -rIn --exclude-dir=.git -F "$s" "$STAGING"; then
+    fail "scrubbed identifier '$s' is back in the export (shown above)"
+  fi
+done
+
+# Credential-shaped secrets.
+if grep -rInE --exclude-dir=.git \
+  "AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|sk_live_[0-9a-zA-Z]{8,}|rk_live_[0-9a-zA-Z]{8,}|whsec_[0-9a-zA-Z]{8,}|ghp_[0-9A-Za-z]{30,}|github_pat_[0-9A-Za-z_]{20,}|xox[baprs]-[0-9A-Za-z-]{10,}|sk-ant-[0-9A-Za-z_-]{20,}|-----BEGIN( RSA| EC| OPENSSH| PGP)? ?PRIVATE KEY" \
+  "$STAGING"; then
+  fail "potential credential found in the export (shown above)"
+fi
+
+# Any AWS account id that is not a documentation placeholder. This is the check
+# that would have caught the 2026-08-09 scrub subject, and MailPoppy's earlier
+# HomeView.test.tsx leak of live Cognito ids — an account number is not secret,
+# but publishing a live one hands an attacker a free target.
+# Match 12-OR-MORE digits and keep only the exactly-12 ones, so a longer number
+# (an epoch-ms timestamp, say) isn't flagged on its first 12 digits. -I skips
+# binaries, whose byte soup matches anything.
+STRAY=$(grep -rhoIE --exclude-dir=.git --exclude='*.lock' --exclude='package-lock.json' \
+  '[0-9]{12,}' "$STAGING" 2>/dev/null | awk 'length($0) == 12' | sort -u \
+  | grep -vE "^($ALLOWED_ACCOUNTS)$" || true)
+if [ -n "$STRAY" ]; then
+  echo "$STRAY" | sed 's/^/  /' >&2
+  fail "12-digit value(s) above are not known documentation account ids — check them"
+fi
+
+COUNT=$(find "$STAGING" -type f -not -path "*/.git/*" | wc -l | tr -d ' ')
+echo "✅ export ready: $COUNT files from agentspoppy@$SRC_SHA → $STAGING"
+echo "   gates passed: no forbidden paths · no scrubbed identifiers · no credentials · no stray account ids"
+
+# ---- Optional commit + push -------------------------------------------------
+if [ -n "$REMOTE" ]; then
+  git -C "$STAGING" add -A
+  if git -C "$STAGING" diff --cached --quiet; then
+    echo "nothing changed since the last sync — not pushing."
+  else
+    git -C "$STAGING" commit -q -m "sync: agentspoppy@$SRC_SHA"
+    git -C "$STAGING" remote remove origin 2>/dev/null || true
+    git -C "$STAGING" remote add origin "$REMOTE"
+    git -C "$STAGING" push -u origin main
+    echo "✅ pushed sync of $SRC_SHA to $REMOTE"
+  fi
+fi
