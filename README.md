@@ -6,6 +6,10 @@
 
 <p align="center"><strong>OAuth for your own AWS — open, local-first, auditable.</strong></p>
 
+<p align="center">
+  <a href="https://github.com/sponsors/leonct74"><img src="https://img.shields.io/badge/Sponsor-%E2%9D%A4-EA4AAA?logo=githubsponsors&logoColor=white" alt="Sponsor AgentsPoppy on GitHub Sponsors"></a>
+</p>
+
 AgentsPoppy is a **permission broker for your own cloud**. An app or AI agent declares the
 AWS access it needs; you approve it in plain language; AgentsPoppy holds your credentials
 **locally**, grants the app a scoped, revocable connection, and **tracks everything that app
