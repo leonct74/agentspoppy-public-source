@@ -27,6 +27,7 @@ PUBLIC_PATHS=(
   NOTICE
   README.md
   TRADEMARK.md
+  MANIFESTO.md
   AGENTS.md
   CLAUDE.md
   .gitignore
