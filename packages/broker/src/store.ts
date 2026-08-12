@@ -29,9 +29,13 @@ export interface BrokerState {
   blockedExtensions: string[];
 }
 
-function homeDir(): string {
+/** Where AgentsPoppy keeps everything of its own. Exported because per-poppy data
+ *  directories hang off it too (registry.ts), and there must be exactly one answer. */
+export function agentsPoppyHome(): string {
   return process.env.AGENTSPOPPY_HOME ?? join(homedir(), ".agentspoppy");
 }
+
+const homeDir = agentsPoppyHome;
 
 function statePath(): string {
   return join(homeDir(), "state.json");

@@ -48,10 +48,65 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/** Accounts that aren't fully set up land on the WIZARD; these tests exercise the pro stepper. */
+function toPro() {
+  fireEvent.click(screen.getByRole("button", { name: "Use the pro setup" }));
+}
+
 describe("ConnectAwsView", () => {
+  it("lands a not-yet-set-up user on the wizard, one click away from pro — and back again", async () => {
+    vi.stubGlobal("fetch", routedFetch());
+    render(<ConnectAwsView accounts={[account]} onBack={() => {}} onChanged={() => {}} />);
+
+    // Wizard is the default for anyone whose setup isn't finished (founder, 2026-08-11).
+    expect(screen.getByRole("button", { name: "Use the pro setup" })).toBeTruthy();
+    expect(screen.queryByText("Paste the Broker Role ARN")).toBeNull();
+
+    // Pro is one click away…
+    toPro();
+    expect(screen.getByText("Paste the Broker Role ARN")).toBeTruthy();
+    // …and anyone tangled in it can hand back to the wizard just as easily.
+    fireEvent.click(screen.getByRole("button", { name: "Switch to the wizard" }));
+    expect(screen.getByRole("button", { name: "Use the pro setup" })).toBeTruthy();
+  });
+
+  it("lands an already-set-up account straight on the pro view (management, not onboarding)", async () => {
+    vi.stubGlobal("fetch", routedFetch());
+    const linked = { ...account, roleArn: "arn:aws:iam::123456789012:role/AgentsPoppyBroker" };
+    render(<ConnectAwsView accounts={[linked]} onBack={() => {}} onChanged={() => {}} />);
+
+    expect(screen.getByText("Paste the Broker Role ARN")).toBeTruthy();
+  });
+
+  it("'use a different account' (unlink) opens the WIZARD — and the stale accounts prop can't bounce it back", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "DELETE") return jsonResponse({ ok: true });
+      if (url.endsWith("/aws/identity")) {
+        return jsonResponse({ accountId: "123456789012", arn: "arn:aws:iam::123456789012:user/op", userId: "U" });
+      }
+      return jsonResponse({}, 404);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const linked = { ...account, roleArn: "arn:aws:iam::123456789012:role/AgentsPoppyBroker" };
+    // onChanged does NOT update the accounts prop here — exactly the stale window the
+    // real app has between unlinking and the refreshed list arriving.
+    render(<ConnectAwsView accounts={[linked]} onBack={() => {}} onChanged={() => {}} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Unlink \/ use a different account/ }));
+
+    // The wizard appears (its pro-switch link is unique to it) and STAYS: the
+    // completed-account handoff is suppressed for an explicit switch.
+    expect(await screen.findByRole("button", { name: "Use the pro setup" })).toBeTruthy();
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([, i]) => (i as RequestInit)?.method === "DELETE")).toBe(true),
+    );
+    expect(screen.queryByText("Paste the Broker Role ARN")).toBeNull();
+  });
+
   it("shows the operator identity and the full set of guided steps, with no-admin framing", async () => {
     vi.stubGlobal("fetch", routedFetch());
     render(<ConnectAwsView accounts={[account]} onBack={() => {}} onChanged={() => {}} />);
+    toPro();
 
     expect(screen.getByText("Connect your AWS")).toBeTruthy();
     expect(screen.getByText(/never asks for or uses admin access/i)).toBeTruthy();
@@ -68,6 +123,7 @@ describe("ConnectAwsView", () => {
   it("generates and shows the CloudFormation setup template (manual path)", async () => {
     vi.stubGlobal("fetch", routedFetch());
     render(<ConnectAwsView accounts={[account]} onBack={() => {}} onChanged={() => {}} />);
+    toPro();
 
     // The template lives behind the expert "Manual" path; automated is the default.
     fireEvent.click(screen.getByRole("tab", { name: "Manual (expert)" }));
@@ -94,6 +150,7 @@ describe("ConnectAwsView", () => {
     const fetchMock = bootstrapFetch();
     vi.stubGlobal("fetch", fetchMock);
     render(<ConnectAwsView accounts={[account]} onBack={() => {}} onChanged={() => {}} />);
+    toPro();
 
     // AWS is already connected → automated reuse is the default; no key form, just deploy.
     // Wait for the reuse panel (its "different credentials" link is unique to it) so we
@@ -114,6 +171,7 @@ describe("ConnectAwsView", () => {
     const fetchMock = bootstrapFetch();
     vi.stubGlobal("fetch", fetchMock);
     render(<ConnectAwsView accounts={[account]} onBack={() => {}} onChanged={() => {}} />);
+    toPro();
 
     fireEvent.click(await screen.findByRole("button", { name: "Use different credentials for this step" }));
     fireEvent.change(screen.getByLabelText("Access Key ID"), { target: { value: "AKIAADMIN" } });
@@ -153,6 +211,7 @@ describe("ConnectAwsView", () => {
   it("lets an already-connected user reveal the key form to change AWS credentials", async () => {
     vi.stubGlobal("fetch", routedFetch());
     render(<ConnectAwsView accounts={[account]} onBack={() => {}} onChanged={() => {}} />);
+    toPro();
 
     // Connected → step 1 shows the identity, no key form until asked.
     await screen.findByText(/Reached AWS as/);
@@ -168,6 +227,7 @@ describe("ConnectAwsView", () => {
   it("offers to link an account on first run, prefilled from the operator identity", async () => {
     vi.stubGlobal("fetch", routedFetch());
     render(<ConnectAwsView accounts={[]} onBack={() => {}} onChanged={() => {}} />);
+    toPro();
 
     expect(await screen.findByText("Link this account")).toBeTruthy();
     expect(screen.getByDisplayValue("000000000000")).toBeTruthy();
@@ -176,6 +236,7 @@ describe("ConnectAwsView", () => {
   it("guides a brand-new user with no AWS to create a free account, then offers the in-app form + CLI path", async () => {
     vi.stubGlobal("fetch", noAwsFetch());
     render(<ConnectAwsView accounts={[]} onBack={() => {}} onChanged={() => {}} />);
+    toPro();
 
     expect(await screen.findByText("Create a free AWS account")).toBeTruthy();
     expect(screen.getByText("No AWS credentials found on this machine.")).toBeTruthy();
@@ -198,6 +259,7 @@ describe("ConnectAwsView", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     render(<ConnectAwsView accounts={[]} onBack={() => {}} onChanged={() => {}} />);
+    toPro();
 
     fireEvent.click(await screen.findByText("I already have AWS"));
     // Scope to the step-1 paste panel — step 3's automated form shares these placeholders.
@@ -243,10 +305,15 @@ describe("ConnectAwsView", () => {
       <ConnectAwsView accounts={[linked]} onBack={() => {}} onChanged={() => {}} initialAction="update-policy" />,
     );
 
-    // The panel names the fix + links to the exact policy to copy.
+    // The panel names the fix and offers the policy. The COPY BUTTON is the primary path —
+    // it reads from the app bundle, so it can't 404 the way the old private-repo link did
+    // (2026-08-11 onboarding breakage). The GitHub link is a convenience and must point at
+    // the PUBLIC mirror.
     expect(await screen.findByText("Update your AWS policy.")).toBeTruthy();
-    const link = screen.getByRole("link", { name: /Open the latest AgentsPoppy policy/i });
+    expect(screen.getAllByRole("button", { name: /Copy the policy/i }).length).toBeGreaterThan(0);
+    const link = screen.getByRole("link", { name: /open it on GitHub/i });
     expect(link.getAttribute("href")).toContain("agentspoppy-access-policy.json");
+    expect(link.getAttribute("href")).toContain("agentspoppy-public-source");
 
     // Re-check runs a live verify.
     fireEvent.click(screen.getByRole("button", { name: "Re-check" }));
@@ -275,8 +342,9 @@ describe("ConnectAwsView", () => {
 
     // Actionable guidance (replace the policy), not just the raw STS message.
     expect(await screen.findByText(/policy is missing a permission/i)).toBeTruthy();
-    const link = screen.getByRole("link", { name: /Open the latest AgentsPoppy policy/i });
-    expect(link.getAttribute("href")).toContain("agentspoppy-access-policy.json");
+    expect(screen.getAllByRole("button", { name: /Copy the policy/i }).length).toBeGreaterThan(0);
+    const link = screen.getByRole("link", { name: /open it on GitHub/i });
+    expect(link.getAttribute("href")).toContain("agentspoppy-public-source");
     // Still shows the raw AWS reason as a detail.
     expect(screen.getByText(/AWS said:/)).toBeTruthy();
   });

@@ -15,7 +15,7 @@
  * intact, and never writes `[default]`. The secret is never logged.
  */
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 
 /** The profile the in-app key entry writes to (never `default`). */
@@ -29,7 +29,13 @@ export interface AwsKeyInput {
 }
 
 const awsDir = (): string => join(homedir(), ".aws");
-const credentialsPath = (): string => join(awsDir(), "credentials");
+// Honour the SDK's standard override. The SDK's own readers (fromIni, the provider
+// chain) already respect AWS_SHARED_CREDENTIALS_FILE — writing to a hardcoded
+// ~/.aws/credentials while reading elsewhere would split the operator key across two
+// files and break any sandboxed run (tests, a fresh-user walkthrough on a dev
+// machine) in a way that looks like an AWS failure.
+const credentialsPath = (): string =>
+  process.env.AWS_SHARED_CREDENTIALS_FILE ?? join(awsDir(), "credentials");
 
 /** True if ~/.aws/credentials already contains an `[agentspoppy]` profile. */
 export function agentspoppyProfileExists(): boolean {
@@ -129,10 +135,10 @@ export function writeAgentsPoppyProfile(input: AwsKeyInput): void {
     throw new Error("Both an Access Key ID and a Secret Access Key are required.");
   }
 
-  const dir = awsDir();
+  const p = credentialsPath();
+  const dir = dirname(p);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
 
-  const p = credentialsPath();
   const existing = existsSync(p) ? readFileSync(p, "utf8") : "";
   const lines = [
     `aws_access_key_id = ${accessKeyId}`,

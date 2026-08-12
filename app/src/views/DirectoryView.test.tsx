@@ -129,6 +129,30 @@ describe("DirectoryView", () => {
     expect(screen.getAllByTitle(/out of 5/)).toHaveLength(1);
   });
 
+  /**
+   * agentspoppy://install deep links (the website's "Deploy for real" handoff) land here
+   * with a focus id: the linked card is spotlit. An id the catalogue doesn't carry gets a
+   * calm notice — the link is untrusted input from an arbitrary web page, never an error.
+   */
+  it("spotlights the deep-linked poppy's card", async () => {
+    vi.mocked(broker.directoryCatalog).mockResolvedValue(catalog(entry()));
+    render(<DirectoryView onInstalled={() => {}} onOpenPoppy={() => {}} focusId="com.mailpoppy.desktop" />);
+
+    expect(await screen.findByText("MailPoppy")).toBeTruthy();
+    const card = document.getElementById("poppy-card-com.mailpoppy.desktop");
+    expect(card?.className).toContain("os-card--focus");
+    expect(screen.queryByText(/isn't in the catalogue/)).toBeNull();
+  });
+
+  it("calmly flags a deep-linked id the catalogue doesn't have", async () => {
+    vi.mocked(broker.directoryCatalog).mockResolvedValue(catalog(entry()));
+    render(<DirectoryView onInstalled={() => {}} onOpenPoppy={() => {}} focusId="com.vanished.desktop" />);
+
+    expect(await screen.findByText(/isn't in the catalogue right now/)).toBeTruthy();
+    // The grid still renders — the notice never replaces the browsing surface.
+    expect(screen.getByText("MailPoppy")).toBeTruthy();
+  });
+
   it("installs on click, then reloads the catalog and tells the host", async () => {
     vi.mocked(broker.directoryCatalog)
       .mockResolvedValueOnce(catalog(entry()))

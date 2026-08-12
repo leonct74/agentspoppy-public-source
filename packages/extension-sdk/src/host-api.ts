@@ -183,6 +183,18 @@ export interface BackendBootstrap {
   credentialsToken?: string;
   /** For an "http" backend: the loopback port the host assigned for it to listen on. */
   port?: number;
+  /**
+   * A directory the host creates and owns for this poppy's own persistent files.
+   *
+   * Write your state here — not `~/.<yourname>/`. Under
+   * `backend.isolation: "strict"` this and the OS temp directory are the ONLY places
+   * you may write, and your install directory the only other place you may read; every
+   * other path on the machine is denied by the runtime.
+   *
+   * To hand a file to the user, do not write to their Downloads folder: serve the bytes
+   * from your `/local-download/<token>` route and let the host's browser save it.
+   */
+  dataDir: string;
   /** Resolved AWS context for the connection. */
   account: { accountId: string; region: string };
 }

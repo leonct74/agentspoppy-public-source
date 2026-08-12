@@ -147,9 +147,9 @@ export async function handle(
     // derive + upsert the account from the setup creds. In-memory creds, never persisted.
     if (parts[0] === "aws" && parts[1] === "bootstrap" && parts.length === 2 && method === "POST") {
       const b = (await readJsonBody(req)) as
-        | { accessKeyId?: string; secretAccessKey?: string; sessionToken?: string }
+        | { accessKeyId?: string; secretAccessKey?: string; sessionToken?: string; region?: string }
         | undefined;
-      return send(res, 200, await service.deployBootstrap(null, setupFromBody(b)));
+      return send(res, 200, await service.deployBootstrap(null, setupFromBody(b), b?.region));
     }
 
     // /aws/credentials — in-app key entry: save pasted keys, return the resolved identity

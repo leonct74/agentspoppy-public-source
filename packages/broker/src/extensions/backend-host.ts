@@ -16,6 +16,9 @@
  * {@link NodeBackendHost} is the real implementation (exercised for real once
  * MailPoppy is ported, Phase 3).
  */
+import { realpathSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import type { BackendBootstrap, ExtensionManifest } from "@agentspoppy/extension-sdk";
 
 /** Everything the host needs to launch one backend. */
@@ -92,6 +95,89 @@ export interface NodeBackendHostOptions {
  */
 export function nodeRuntimeArgs(entry: string, isSea: boolean): string[] {
   return isSea ? ["--poppy-backend", entry] : [entry];
+}
+
+/**
+ * The environment a poppy backend is allowed to inherit.
+ *
+ * A backend gets its AWS access ONE way: by minting short-lived, session-policy-narrowed
+ * credentials against the loopback endpoint in its bootstrap. It has no legitimate use for
+ * an `AWS_*` variable of any kind — so passing the parent's through would hand a poppy the
+ * operator's own long-lived key for free whenever AgentsPoppy is launched from a shell that
+ * exports one. That is common for exactly the developer audience most likely to look.
+ *
+ * The rule is deliberately the whole `AWS_*` namespace rather than a list of known-dangerous
+ * names: `AWS_ACCESS_KEY_ID`, `AWS_SESSION_TOKEN`, `AWS_PROFILE`, `AWS_SHARED_CREDENTIALS_FILE`,
+ * `AWS_CONTAINER_CREDENTIALS_FULL_URI` and friends are all routes to a credential, and AWS
+ * keeps adding more. An allowlist of one prefix cannot go stale; an exclusion list can.
+ *
+ * This does NOT stop a backend reading `~/.aws/credentials` off disk — same OS user, same
+ * permissions. Closing that needs the filesystem to be constrained too (docs/SECURITY_MECHANISM.md).
+ */
+export function poppyEnv(parent: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(parent)) {
+    if (/^AWS_/i.test(key)) continue;
+    // NODE_OPTIONS is ours to set for a confined backend (see confinementOptions). An
+    // inherited one could carry `--allow-fs-read=*` and quietly undo the allowlist.
+    if (key === "NODE_OPTIONS") continue;
+    env[key] = value;
+  }
+  return env;
+}
+
+/**
+ * The `NODE_OPTIONS` value that confines a `runtime: node22` backend, or null when the
+ * poppy has not asked to be confined.
+ *
+ * Node's permission model is **allowlist-only** — there is no way to express "everything
+ * except `~/.aws`" — so this enumerates the three places a backend legitimately needs and
+ * nothing else. `~/.aws/credentials`, the browser profile, the SSH keys and the user's
+ * documents are all denied by the runtime, not by convention.
+ *
+ * Child processes stay denied (no `--allow-child-process`), because `cat ~/.aws/credentials`
+ * would otherwise walk straight around the filesystem allowlist.
+ *
+ * Passed via `NODE_OPTIONS` rather than argv because the packaged host re-execs *itself*
+ * as the interpreter (`--poppy-backend <entry>`), so argv is already spoken for. Verified
+ * that the permission model engages this way.
+ */
+export function confinementOptions(
+  spec: { manifest: ExtensionManifest; root: string; bootstrap: { dataDir?: string } },
+  tmp: string,
+): string | null {
+  const backend = spec.manifest.backend;
+  if (backend?.isolation !== "strict") return null;
+  const dataDir = spec.bootstrap.dataDir;
+  if (!dataDir) throw new Error(`extension ${spec.manifest.id} asked for strict isolation but was given no dataDir`);
+  const read = [spec.root, dataDir, tmp];
+  const write = [dataDir, tmp];
+  return [
+    "--permission",
+    ...read.flatMap((p) => grantsFor("read", p)),
+    ...write.flatMap((p) => grantsFor("write", p)),
+  ].join(" ");
+}
+
+/**
+ * The allowlist entries for one directory.
+ *
+ * Two subtleties, both of which cost a debugging session if missed:
+ *  - The permission model resolves symlinks, and the usual temp directory is one on macOS
+ *    (`/var/folders/…` → `/private/var/folders/…`). Granting only the path we were handed
+ *    denies the path the runtime actually checks, and the backend dies at startup. So both
+ *    spellings are granted.
+ *  - A bare directory path matches only the directory entry itself; `dir/*` is how this
+ *    model spells "and everything under it". Both are needed.
+ */
+function grantsFor(kind: "read" | "write", dir: string): string[] {
+  const paths = new Set([dir]);
+  try {
+    paths.add(realpathSync(dir));
+  } catch {
+    // Not created yet — the literal path is still worth granting.
+  }
+  return [...paths].flatMap((p) => [`--allow-fs-${kind}=${p}`, `--allow-fs-${kind}=${join(p, "*")}`]);
 }
 
 /**
@@ -181,9 +267,31 @@ export class NodeBackendHost implements BackendHost {
       args = [];
     }
 
+    const confinement = confinementOptions(spec, tmpdir());
+    let cwd = spec.root;
+    if (confinement) {
+      // Under the permission model the runtime checks REAL paths, and it walks the entry
+      // path to load it. Handed a path through a symlink (`/var/...` → `/private/var/...`,
+      // the usual shape of a temp or installed-app directory on macOS) it asks for read on
+      // the link's root — `/var` — which no sane allowlist grants, and the backend dies
+      // before its first line runs. Resolve here so the runtime and the allowlist agree.
+      try {
+        cwd = realpathSync(spec.root);
+        const resolved = realpathSync(entry);
+        args = args.map((a) => (a === entry ? resolved : a));
+        if (executable === entry) executable = resolved;
+        entry = resolved;
+      } catch {
+        // Missing paths are reported by the spawn itself, with a better message.
+      }
+    }
     const child = spawn(executable, args, {
-      cwd: spec.root,
-      env: { ...process.env, AGENTSPOPPY_BOOTSTRAP: JSON.stringify(spec.bootstrap) },
+      cwd,
+      env: {
+        ...poppyEnv(process.env),
+        AGENTSPOPPY_BOOTSTRAP: JSON.stringify(spec.bootstrap),
+        ...(confinement ? { NODE_OPTIONS: confinement } : {}),
+      },
       stdio: "inherit",
     });
 

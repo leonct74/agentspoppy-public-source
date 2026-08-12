@@ -226,7 +226,22 @@ fn kill_broker(app: &tauri::AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Must be first: on Windows/Linux a second launch (e.g. the OS handing us an
+        // agentspoppy:// link) forwards into the running instance instead of starting a
+        // rival app whose broker would lose the port. The "deep-link" feature relays the
+        // link so the frontend's onOpenUrl fires in the surviving instance.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_shell::init())
+        // agentspoppy://install?id=<catalogue-id> from the website's "Deploy for real"
+        // buttons. The frontend treats the link as untrusted input: it accepts only a
+        // catalogue id and resolves it against the curated directory itself.
+        .plugin(tauri_plugin_deep_link::init())
         // Opens AWS console URLs in the system browser — window.open() does
         // nothing in the WKWebView.
         .plugin(tauri_plugin_opener::init())
@@ -241,6 +256,15 @@ pub fn run() {
         .manage(HostToken::default())
         .invoke_handler(tauri::generate_handler![broker_host_token])
         .setup(|app| {
+            // macOS (Info.plist) and the Windows installers register the agentspoppy://
+            // scheme at install time; Linux and dev builds must register at runtime.
+            // Best-effort — a failure here should never stop the app from launching.
+            #[cfg(any(target_os = "linux", all(debug_assertions, windows)))]
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let _ = app.deep_link().register_all();
+            }
+
             spawn_broker(app.handle())?;
 
             // The main window starts hidden (`"visible": false`) so users never

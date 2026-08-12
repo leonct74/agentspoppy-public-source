@@ -286,7 +286,14 @@ export const broker = {
    */
   deployBootstrap: (
     accountId: string | null,
-    input?: { accessKeyId: string; secretAccessKey: string; sessionToken?: string },
+    input?: {
+      /** Omit both keys to reuse the credentials already connected on this machine. */
+      accessKeyId?: string;
+      secretAccessKey?: string;
+      sessionToken?: string;
+      /** Fresh-machine (accountId null) only: where the setup should live. */
+      region?: string;
+    },
   ) =>
     req<{
       brokerRoleArn: string;

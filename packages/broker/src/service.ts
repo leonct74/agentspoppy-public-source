@@ -163,6 +163,9 @@ export class BrokerService {
   async deployBootstrap(
     accountId: string | null,
     setup?: AwsKeyInput,
+    /** Fresh-machine only: where the setup should live (the wizard's region choice).
+     *  Ignored when an account is already linked — you can't move a setup by re-running it. */
+    regionOverride?: string,
   ): Promise<{
     brokerRoleArn: string;
     account: ConnectedAccount;
@@ -181,8 +184,15 @@ export class BrokerService {
     if (accountId && !existing) throw new BrokerError("not_found", `account ${accountId} not found`);
 
     // No linked account yet (fresh machine) → derive everything from the setup
-    // creds, so the user never has to persist admin keys first.
-    const region = existing ? regionFor(existing) : process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? "us-east-1";
+    // creds, so the user never has to persist admin keys first. The wizard passes the
+    // user's region choice here; without it we'd silently plant every setup in
+    // us-east-1 no matter where the user lives.
+    if (regionOverride && !/^[a-z]{2}(-[a-z]+)+-\d$/.test(regionOverride.trim())) {
+      throw new BrokerError("bad_request", `"${regionOverride}" is not an AWS region name`);
+    }
+    const region = existing
+      ? regionFor(existing)
+      : regionOverride?.trim() || process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || "us-east-1";
     const result = await this.aws.deployBootstrap({ setup, region, expectedAccountId: existing?.accountId });
     this.operatorIdCache = null; // bootstrap writes a fresh operator key = new identity
 

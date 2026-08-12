@@ -466,6 +466,76 @@ select.field { cursor: pointer; }
 .done-burst::before { content: ""; position: absolute; inset: -6px; border-radius: 999px; border: 2px solid var(--ok); opacity: 0; animation: ap-ring 0.8s ease-out 0.1s; }
 @keyframes ap-ring { 0% { transform: scale(0.5); opacity: 0.7; } 100% { transform: scale(1.6); opacity: 0; } }
 
+/* ============================================================
+   Setup wizard — the path most users take (2026-08-11)
+   ============================================================ */
+
+.wizard .btn-lg { padding: 11px 22px; font-size: 15px; }
+
+/* Sliding step panes — forward enters from the right, "previous" from the left. */
+@keyframes wiz-slide-fwd { from { opacity: 0; transform: translateX(48px); } to { opacity: 1; transform: none; } }
+@keyframes wiz-slide-back { from { opacity: 0; transform: translateX(-48px); } to { opacity: 1; transform: none; } }
+.wiz-slide-fwd { animation: wiz-slide-fwd 0.32s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.wiz-slide-back { animation: wiz-slide-back 0.32s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.wiz-pane { overflow-x: hidden; }
+.wiz-stepno { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; margin: 0 0 4px; }
+.wiz-step-title { font-size: 18px; letter-spacing: -0.01em; margin: 0 0 8px; }
+.wiz-nav { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+.wiz-nav .spacer { flex: 1; }
+
+/* Step 1: the region grid — flag + place name, one tap to choose and move on. */
+.wiz-regions { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; margin: 12px 0; }
+.wiz-region { display: flex; align-items: center; gap: 11px; padding: 12px 14px; background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; cursor: pointer; text-align: left; font: inherit; color: inherit; transition: border-color 0.15s ease, transform 0.15s ease; }
+.wiz-region:hover { border-color: var(--primary); transform: translateY(-1px); }
+.wiz-region.selected { border-color: var(--primary); }
+.wiz-region-flag { font-size: 22px; line-height: 1; }
+.wiz-region-place { display: block; font-weight: 600; font-size: 13.5px; }
+.wiz-region-code { display: block; font-size: 12px; margin-top: 1px; }
+
+.wiz-steps { margin: 8px 0 2px; padding-left: 20px; display: flex; flex-direction: column; gap: 10px; }
+.wiz-steps li { font-size: 13.5px; line-height: 1.55; }
+.wiz-steps .btn-sm { vertical-align: baseline; }
+.wiz-pro-switch { margin-top: 4px; }
+.wiz-pro-switch .btn.link { display: inline; padding: 0; }
+.wiz-return { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; font-size: 13px; }
+.wiz-return .btn.link { padding: 0; }
+
+/* Honest progress: exactly one spinner at a time; finished stages flip to a drawn check. */
+.wiz-progress { list-style: none; margin: 10px 0; padding: 0; display: flex; flex-direction: column; gap: 16px; }
+.wiz-stage { display: flex; gap: 12px; align-items: flex-start; }
+.wiz-stage-marker { display: grid; place-items: center; width: 26px; height: 26px; flex: 0 0 auto; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-1); }
+.wiz-stage-done .wiz-stage-marker { border-color: color-mix(in srgb, var(--ok) 55%, transparent); color: var(--ok); animation: ap-pop 0.35s ease; }
+.wiz-stage-done .wiz-stage-marker svg { width: 14px; height: 14px; }
+.wiz-stage-done .wiz-stage-marker svg path { stroke-dasharray: 24; stroke-dashoffset: 24; animation: ap-draw 0.45s ease forwards 0.08s; }
+.wiz-stage-todo { opacity: 0.45; }
+.wiz-stage-title { display: block; font-weight: 600; font-size: 14px; }
+.wiz-stage-hint { display: block; font-size: 12.5px; margin-top: 2px; }
+
+/* The finale: a check that draws itself, a ring, and a little poppy-petal burst. */
+.wiz-success { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; padding: 48px 0 24px; animation: ap-rise 0.4s ease both; }
+.wiz-success h2 { margin: 8px 0 0; font-size: 24px; letter-spacing: -0.02em; }
+.wiz-success p { max-width: 44ch; margin: 0 0 8px; }
+.wiz-success .btn-primary { margin-top: 6px; }
+.wiz-success-mark { position: relative; display: grid; place-items: center; width: 84px; height: 84px; }
+.wiz-success-mark svg { width: 72px; height: 72px; }
+.wiz-success-circle { stroke: var(--ok); stroke-width: 2.5; stroke-dasharray: 151; stroke-dashoffset: 151; animation: ap-draw 0.6s ease-out forwards; }
+.wiz-success-check { stroke: var(--ok); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 36; stroke-dashoffset: 36; animation: ap-draw 0.4s ease-out forwards 0.55s; }
+.wiz-success-mark::before { content: ""; position: absolute; inset: 0; border-radius: 999px; border: 2px solid var(--ok); opacity: 0; animation: ap-ring 0.9s ease-out 0.85s; }
+.wiz-petal { position: absolute; top: 50%; left: 50%; width: 7px; height: 7px; border-radius: 999px 999px 999px 2px; background: var(--primary); opacity: 0; animation: wiz-petal-fly 0.9s ease-out 0.9s; }
+.wiz-petal.p2 { background: var(--ok); }
+.wiz-petal.p5 { background: var(--ok); }
+@keyframes wiz-petal-fly {
+  0% { opacity: 0; transform: translate(-50%, -50%) rotate(var(--fly, 0deg)) translateY(0) scale(0.6); }
+  15% { opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%, -50%) rotate(var(--fly, 0deg)) translateY(-58px) scale(1); }
+}
+.wiz-petal.p1 { --fly: 0deg; }
+.wiz-petal.p2 { --fly: 60deg; }
+.wiz-petal.p3 { --fly: 120deg; }
+.wiz-petal.p4 { --fly: 180deg; }
+.wiz-petal.p5 { --fly: 240deg; }
+.wiz-petal.p6 { --fly: 300deg; }
+
 @media (prefers-reduced-motion: reduce) {
   .step, .noaws, .panel, .done-banner, .splash, .splash > *, .splash-backdrop, .guard { animation: none; }
   .splash-logo-wrap, .splash-logo-wrap::before, .splash-logo, .guardbar-shield::after { animation: none; }
@@ -474,6 +544,12 @@ select.field { cursor: pointer; }
   .step-done .step-marker svg path { stroke-dashoffset: 0; animation: none; }
   .done-burst::before { animation: none; }
   .progress-fill { transition: none; }
+  .wiz-success, .wiz-stage-done .wiz-stage-marker { animation: none; }
+  .wiz-slide-fwd, .wiz-slide-back { animation: none; }
+  .wiz-region { transition: none; }
+  .wiz-stage-done .wiz-stage-marker svg path { stroke-dashoffset: 0; animation: none; }
+  .wiz-success-circle, .wiz-success-check { stroke-dashoffset: 0; animation: none; }
+  .wiz-success-mark::before, .wiz-petal { animation: none; }
 }
 
 /* ============================================================
@@ -645,6 +721,14 @@ select.field { cursor: pointer; }
 /* Square-ish poppy cards in a responsive grid. */
 .os-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; padding: 13px; }
 .os-card { display: flex; flex-direction: column; gap: 10px; min-height: 172px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 11px; padding: 13px 14px; min-width: 0; }
+/* Deep-link landing (agentspoppy://install): the linked poppy's card is spotlit in the
+   host's clay — this is AgentsPoppy pointing, not the poppy speaking, so clay is correct.
+   The glow settles rather than looping: a link should draw the eye once, not nag. */
+.os-card--focus { border-color: var(--clay); animation: os-card-focus 1.6s ease-out 2; }
+@keyframes os-card-focus {
+  0% { box-shadow: 0 0 0 0 rgba(217, 119, 87, 0.55); }
+  100% { box-shadow: 0 0 0 9px rgba(217, 119, 87, 0); }
+}
 .os-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .os-avatar { width: 34px; height: 34px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 9px; background: var(--surface-0); border: 1px solid var(--border); font-size: 12px; font-weight: 600; color: var(--text); letter-spacing: 0.03em; }
 /* A poppy's real app icon fills its avatar box, rounded by the host (letter monograms are the fallback). */

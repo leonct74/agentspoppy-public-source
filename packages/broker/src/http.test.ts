@@ -95,6 +95,26 @@ describe("broker HTTP API", () => {
     expect((await postJson(`${base}/aws/bootstrap`, { accessKeyId: "AKIA" })).status).toBe(400);
   });
 
+  it("account-less bootstrap honours the wizard's region choice", async () => {
+    const res = await postJson(`${base}/aws/bootstrap`, {
+      accessKeyId: "AKIAADMIN",
+      secretAccessKey: "admin-secret",
+      region: "eu-west-1",
+    });
+    expect(res.status).toBe(200);
+    // The linked account lives where the user asked — not silently in us-east-1.
+    expect((await res.json()).account.regions).toEqual(["eu-west-1"]);
+  });
+
+  it("rejects a region that is not an AWS region name", async () => {
+    const res = await postJson(`${base}/aws/bootstrap`, {
+      accessKeyId: "AKIAADMIN",
+      secretAccessKey: "admin-secret",
+      region: "narnia",
+    });
+    expect(res.status).toBe(400);
+  });
+
   it("unlinks an account, cascading to its connections", async () => {
     const acc = await (await postJson(`${base}/accounts`, { accountId: "123456789012", regions: [] })).json();
     await postJson(`${base}/connections`, {

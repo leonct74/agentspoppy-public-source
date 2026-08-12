@@ -6,7 +6,7 @@ import net from "node:net";
 import { mkdtemp, rm, writeFile, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { NodeBackendHost, killAllBackends, nodeRuntimeArgs, nodeRuntimeError, poppyBackendEntry, waitForPort } from "./backend-host";
+import { NodeBackendHost, confinementOptions, killAllBackends, nodeRuntimeArgs, nodeRuntimeError, poppyBackendEntry, poppyEnv, waitForPort } from "./backend-host";
 import type { ExtensionManifest } from "@agentspoppy/extension-sdk";
 
 /** A throwaway TCP server on an OS-assigned loopback port. */
@@ -103,6 +103,155 @@ describe("shared node runtime (docs/RUNTIMES.md)", () => {
     expect(proc.running).toBe(true); // resolved ⇒ the bundle is listening on the assigned port
     await proc.stop();
     await rm(root, { recursive: true, force: true });
+  });
+
+  it("never passes an AWS_* variable to a backend — a real spawn reports what it received", async () => {
+    // The whole point of the broker is that a poppy is given scoped, short-lived creds and
+    // nothing else. Inheriting the launching shell's AWS_ACCESS_KEY_ID would hand it the
+    // operator's long-lived key with no attack required at all.
+    const root = await mkdtemp(join(tmpdir(), "ap-envscrub-"));
+    const port = await deadPort();
+    await writeFile(
+      join(root, "index.cjs"),
+      `const http = require("node:http");
+       const boot = JSON.parse(process.env.AGENTSPOPPY_BOOTSTRAP);
+       const leaked = Object.keys(process.env).filter((k) => /^AWS_/i.test(k));
+       http.createServer((q, r) => r.end(JSON.stringify(leaked))).listen(boot.port, "127.0.0.1");`,
+    );
+    const manifest = {
+      id: "com.test.envscrub",
+      backend: { entry: "index.cjs", transport: "http", runtime: "node22" },
+    } as unknown as ExtensionManifest;
+
+    const saved = { ...process.env };
+    process.env.AWS_ACCESS_KEY_ID = "AKIALEAKEDTOAPOPPY";
+    process.env.AWS_SECRET_ACCESS_KEY = "super-secret";
+    process.env.AWS_SESSION_TOKEN = "tok";
+    process.env.AWS_PROFILE = "agentspoppy";
+    process.env.aws_lowercase_variant = "also-blocked";
+    process.env.NOT_AWS_RELATED = "keep me";
+    try {
+      const proc = await new NodeBackendHost({ readinessTimeoutMs: 10_000, readinessIntervalMs: 25 }).start({
+        manifest,
+        root,
+        bootstrap: { connectionId: "c1", credentialsUrl: "http://127.0.0.1:1/creds", port } as never,
+      });
+      const leaked = await fetch(`http://127.0.0.1:${port}/`).then((r) => r.json());
+      expect(leaked).toEqual([]);
+      await proc.stop();
+    } finally {
+      process.env = saved;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("a strictly-isolated backend is denied the credentials file, and keeps its own dirs", async () => {
+    // The claim this test exists to defend: a poppy cannot read ~/.aws/credentials. Not by
+    // policy, not by review — by the runtime refusing. So the fixture reports what it can
+    // actually do, and we assert on that rather than on the flags we passed.
+    const root = await mkdtemp(join(tmpdir(), "ap-confine-"));
+    const dataDir = await mkdtemp(join(tmpdir(), "ap-confine-data-"));
+    const port = await deadPort();
+    await writeFile(
+      join(root, "index.cjs"),
+      `const http = require("node:http"), fs = require("node:fs"), os = require("node:os"), path = require("node:path");
+       const boot = JSON.parse(process.env.AGENTSPOPPY_BOOTSTRAP);
+       const probe = (fn) => { try { fn(); return "allowed"; } catch (e) { return e.code || "error"; } };
+       const report = {
+         credentials: probe(() => fs.readFileSync(path.join(os.homedir(), ".aws", "credentials"))),
+         homeListing: probe(() => fs.readdirSync(os.homedir())),
+         escapeViaSubprocess: probe(() => require("node:child_process").execSync("cat ~/.aws/credentials")),
+         ownInstallDir: probe(() => fs.readFileSync(path.join(__dirname, "index.cjs"))),
+         ownDataDir: probe(() => fs.writeFileSync(path.join(boot.dataDir, "state.json"), "{}")),
+       };
+       http.createServer((q, r) => r.end(JSON.stringify(report))).listen(boot.port, "127.0.0.1");`,
+    );
+    const manifest = {
+      id: "com.test.confined",
+      backend: { entry: "index.cjs", transport: "http", runtime: "node22", isolation: "strict" },
+    } as unknown as ExtensionManifest;
+
+    const proc = await new NodeBackendHost({ readinessTimeoutMs: 10_000, readinessIntervalMs: 25 }).start({
+      manifest,
+      root,
+      bootstrap: { connectionId: "c1", credentialsUrl: "http://127.0.0.1:1/creds", port, dataDir } as never,
+    });
+    const report = await fetch(`http://127.0.0.1:${port}/`).then((r) => r.json());
+    await proc.stop();
+
+    expect(report.credentials).toBe("ERR_ACCESS_DENIED");
+    expect(report.homeListing).toBe("ERR_ACCESS_DENIED");
+    expect(report.escapeViaSubprocess).toBe("ERR_ACCESS_DENIED"); // no shelling out around it
+    expect(report.ownInstallDir).toBe("allowed"); // it can still run
+    expect(report.ownDataDir).toBe("allowed"); // ...and still keep state
+
+    await rm(root, { recursive: true, force: true });
+    await rm(dataDir, { recursive: true, force: true });
+  });
+
+  it("an unconfined backend can read the credentials file — the fixture is not lying to us", async () => {
+    // Negative control. Without this, the test above would pass just as happily if the
+    // fixture were broken and every probe returned ERR_ACCESS_DENIED for some other reason.
+    const root = await mkdtemp(join(tmpdir(), "ap-unconfined-"));
+    const port = await deadPort();
+    await writeFile(
+      join(root, "index.cjs"),
+      `const http = require("node:http"), fs = require("node:fs"), os = require("node:os");
+       const boot = JSON.parse(process.env.AGENTSPOPPY_BOOTSTRAP);
+       let home; try { fs.readdirSync(os.homedir()); home = "allowed"; } catch (e) { home = e.code; }
+       http.createServer((q, r) => r.end(JSON.stringify({ home }))).listen(boot.port, "127.0.0.1");`,
+    );
+    const manifest = {
+      id: "com.test.unconfined",
+      backend: { entry: "index.cjs", transport: "http", runtime: "node22" },
+    } as unknown as ExtensionManifest;
+
+    const proc = await new NodeBackendHost({ readinessTimeoutMs: 10_000, readinessIntervalMs: 25 }).start({
+      manifest,
+      root,
+      bootstrap: { connectionId: "c1", credentialsUrl: "http://127.0.0.1:1/creds", port, dataDir: root } as never,
+    });
+    const report = await fetch(`http://127.0.0.1:${port}/`).then((r) => r.json());
+    await proc.stop();
+    expect(report.home).toBe("allowed"); // today's default, and exactly why "strict" exists
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("confinementOptions is off unless asked for, and refuses to pretend without a dataDir", () => {
+    const base = { root: "/opt/poppy", bootstrap: { dataDir: "/data/poppy" } };
+    const plain = { ...base, manifest: { id: "x", backend: { entry: "i.cjs", runtime: "node22" } } as never };
+    expect(confinementOptions(plain, "/tmp")).toBeNull();
+
+    const strict = {
+      ...base,
+      manifest: { id: "x", backend: { entry: "i.cjs", runtime: "node22", isolation: "strict" } } as never,
+    };
+    const opts = confinementOptions(strict, "/tmp")!;
+    expect(opts).toContain("--permission");
+    expect(opts).toContain("--allow-fs-read=/opt/poppy");
+    expect(opts).toContain("--allow-fs-write=/data/poppy");
+    expect(opts).not.toContain("--allow-child-process");
+    expect(opts).not.toContain("--allow-fs-write=/opt/poppy"); // its own code stays read-only
+
+    expect(() => confinementOptions({ ...strict, bootstrap: {} }, "/tmp")).toThrow(/dataDir/);
+  });
+
+  it("poppyEnv drops the whole AWS_ namespace and keeps everything else", () => {
+    const out = poppyEnv({
+      AWS_ACCESS_KEY_ID: "a",
+      AWS_SECRET_ACCESS_KEY: "b",
+      AWS_SESSION_TOKEN: "c",
+      AWS_PROFILE: "d",
+      AWS_SHARED_CREDENTIALS_FILE: "e",
+      AWS_CONTAINER_CREDENTIALS_FULL_URI: "f",
+      AWS_WEB_IDENTITY_TOKEN_FILE: "g",
+      aws_region: "h", // case-insensitive: env vars are case-sensitive on POSIX
+      PATH: "/usr/bin",
+      HOME: "/home/x",
+    });
+    expect(Object.keys(out).sort()).toEqual(["HOME", "PATH"]);
+    // A future AWS_* name we have never heard of is covered by construction.
+    expect(poppyEnv({ AWS_SOMETHING_INVENTED_IN_2030: "x" })).toEqual({});
   });
 
   it("refuses a node runtime newer than this host's Node, with an 'update AgentsPoppy' error", async () => {

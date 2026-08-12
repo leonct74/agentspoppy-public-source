@@ -31,17 +31,29 @@
 //   node scripts/release-check.mjs --live         # adds gate 6 (post-publish)
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const appDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const conf = JSON.parse(readFileSync(`${appDir}/src-tauri/tauri.conf.json`, "utf8"));
 const version = conf.version;
-const bundleDir = `${appDir}/src-tauri/target/release/bundle`;
+// macOS ships ONE universal binary (Intel + Apple Silicon) so a user never has to know
+// which Mac they own. The per-arch layout is still recognised: a plain `tauri build`
+// during development writes to target/release, and older releases were aarch64-only.
+// Prefer the universal artifact, fall back to the arch-specific one, so this gate
+// follows what was actually built instead of dictating it.
+const CANDIDATES = [
+  { bundle: `${appDir}/src-tauri/target/universal-apple-darwin/release/bundle`, suffix: "universal" },
+  { bundle: `${appDir}/src-tauri/target/release/bundle`, suffix: "aarch64" },
+];
+const built =
+  CANDIDATES.find((c) => existsSync(`${c.bundle}/dmg/AgentsPoppy_${version}_${c.suffix}.dmg`)) ?? CANDIDATES[0];
+const bundleDir = built.bundle;
 const appPath = `${bundleDir}/macos/AgentsPoppy.app`;
-const dmgPath = `${bundleDir}/dmg/AgentsPoppy_${version}_aarch64.dmg`;
+const dmgPath = `${bundleDir}/dmg/AgentsPoppy_${version}_${built.suffix}.dmg`;
 const brokerPath = `${appPath}/Contents/MacOS/agentspoppy-broker`;
+const updaterTar = `${bundleDir}/macos/AgentsPoppy.app.tar.gz`;
 const live = process.argv.includes("--live");
 const DOWNLOAD_PAGE = "https://agentspoppy.com/download";
 
@@ -98,6 +110,94 @@ gate("notarization: spctl accepts the app", /accepted/.test(sp) && /Notarized De
   /accepted/.test(sp) ? "" : "run AFTER notarize+staple; skip pre-notarize");
 const st = sh("xcrun", ["stapler", "validate", dmgPath]);
 gate("notarization: ticket stapled to DMG", /worked/.test(st));
+
+// ── The updater archive ───────────────────────────────────────────────────────────────
+// v0.3.1 shipped an update that every user's app refused to install, while every gate
+// above passed: signatures, entitlements, notarization and the minisign signature were
+// all correct. The archive was the problem.
+//
+// The updater strips the leading path component of each entry
+// (`entry.path().iter().skip(1)`) and unpacks the rest over the installed .app. macOS
+// `tar` stores extended attributes as AppleDouble side-files, and the one for the bundle
+// root is named `._AgentsPoppy.app` — a SINGLE component, so skip(1) leaves nothing and
+// the destination becomes the extraction directory itself. Unpacking a file onto a
+// directory errors, and that aborts the whole install.
+//
+// Let Tauri build this archive. If something ever hand-rolls it again with system `tar`,
+// fail here rather than in front of a user. `tar -tzf` silently re-merges AppleDouble
+// entries and will NOT show them, so this reads the raw member list.
+const rawEntries = sh("python3", [
+  "-c",
+  "import tarfile,sys\n" +
+    "for m in tarfile.open(sys.argv[1],'r:gz').getmembers(): print(('D' if m.isdir() else 'F') + m.name)",
+  updaterTar,
+]);
+const entries = rawEntries.split("\n").filter(Boolean).map((l) => ({ dir: l[0] === "D", name: l.slice(1) }));
+const appleDouble = entries.filter((e) => e.name.split("/").some((p) => p.startsWith("._")));
+gate(
+  "updater archive: no AppleDouble entries (they abort the install)",
+  existsSync(updaterTar) && entries.length > 0 && appleDouble.length === 0,
+  appleDouble.length ? appleDouble.slice(0, 3).map((e) => e.name).join(", ") : `${entries.length} entries`,
+);
+// Replay the strip so a future path-shape change is caught too. The bundle root itself
+// reduces to nothing, which is fine — it is a directory, and the updater unpacks it onto
+// its own (already existing) extraction directory. A FILE that reduces to nothing is the
+// fatal case: it lands on that directory and the install aborts.
+const collides = entries.filter((e) => !e.dir && e.name.split("/").length === 1);
+gate(
+  "updater archive: no file collapses onto the extraction root",
+  collides.length === 0,
+  collides.length ? collides.map((e) => e.name).join(", ") : "",
+);
+
+// ── 5b. USER-FACING LINKS must resolve WITHOUT credentials ────────────────
+// On 2026-08-11 the onboarding's "copy the access policy" link pointed into the PRIVATE
+// monorepo. It resolved perfectly for the maintainer and 404'd for every user, stranding
+// them mid-setup. Same trap that broke MailPoppy's installs. So: extract every https URL
+// the app ships and fetch each one anonymously.
+//
+// Also asserts the bundled copy of the policy matches infra/policies — the copy button is
+// the primary path now, and a stale embedded policy would grant the wrong permissions.
+// Scan EVERY shipped source file, not one hand-picked view — the first version of this
+// gate read only ConnectAwsView.tsx, and the very next refactor (moving the links into
+// connectShared.tsx) would have quietly reduced it to checking nothing.
+const srcFiles = [];
+const walk = (dir) => {
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const p = `${dir}/${e.name}`;
+    if (e.isDirectory()) walk(p);
+    else if (/\.(ts|tsx)$/.test(e.name) && !/\.test\./.test(e.name)) srcFiles.push(p);
+  }
+};
+walk(`${appDir}/src`);
+const viewSrc = srcFiles.map((f) => readFileSync(f, "utf8")).join("\n");
+const shippedLinks = [...new Set((viewSrc.match(/https:\/\/[^"'`\s)]+/g) ?? []))].filter(
+  (u) =>
+    !u.includes("console.aws.amazon.com") && // requires a signed-in AWS session by design
+    !u.includes("schemas.") && // XML/JSON schema namespaces, not links a user follows
+    !u.includes("www.w3.org"),
+);
+const brokenLinks = [];
+for (const url of shippedLinks) {
+  const out = sh("curl", ["-sIL", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "20", url]);
+  if (!/^(200|301|302)/.test(out.trim())) brokenLinks.push(`${url} → ${out.trim()}`);
+}
+gate(
+  "links: every shipped user-facing URL resolves anonymously",
+  brokenLinks.length === 0,
+  brokenLinks.join(" · ") || `${shippedLinks.length} checked`,
+);
+gate(
+  "links: no user-facing link points into the PRIVATE monorepo",
+  !shippedLinks.some((u) => /github\.com\/leonct74\/agentspoppy\//.test(u)),
+);
+const bundledPolicy = readFileSync(`${appDir}/src/assets/access-policy.json`, "utf8");
+const sourcePolicy = readFileSync(`${appDir}/../infra/policies/agentspoppy-access-policy.json`, "utf8");
+gate(
+  "policy: the copy-button's bundled policy matches infra/policies",
+  JSON.stringify(JSON.parse(bundledPolicy)) === JSON.stringify(JSON.parse(sourcePolicy)),
+  "re-copy infra/policies/agentspoppy-access-policy.json → app/src/assets/access-policy.json",
+);
 
 // ── 6. --live: published funnel integrity ─────────────────────────────────
 async function fetchRetry(url, tries = 3) {

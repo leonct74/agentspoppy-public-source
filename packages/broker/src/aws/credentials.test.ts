@@ -37,4 +37,27 @@ describe("writeAgentsPoppyProfile", () => {
     expect(() => writeAgentsPoppyProfile({ accessKeyId: "", secretAccessKey: "x" })).toThrow(/Access Key ID/);
     expect(() => writeAgentsPoppyProfile({ accessKeyId: "x", secretAccessKey: "  " })).toThrow(/Secret Access Key/);
   });
+
+  it("writes where the SDK reads — AWS_SHARED_CREDENTIALS_FILE wins over ~/.aws", async () => {
+    // The SDK's readers honour this env var; if the writer didn't, a sandboxed run
+    // (tests, a fresh-user walkthrough) would write the operator key to the real
+    // ~/.aws/credentials and then fail to read it back — an apparent AWS failure.
+    const { mkdtempSync, readFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "ap-creds-"));
+    const file = join(dir, "nested", "credentials");
+    const prev = process.env.AWS_SHARED_CREDENTIALS_FILE;
+    process.env.AWS_SHARED_CREDENTIALS_FILE = file;
+    try {
+      writeAgentsPoppyProfile({ accessKeyId: "AKIASANDBOX", secretAccessKey: "shh" });
+      const out = readFileSync(file, "utf8");
+      expect(out).toContain("[agentspoppy]");
+      expect(out).toContain("AKIASANDBOX");
+    } finally {
+      if (prev === undefined) delete process.env.AWS_SHARED_CREDENTIALS_FILE;
+      else process.env.AWS_SHARED_CREDENTIALS_FILE = prev;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

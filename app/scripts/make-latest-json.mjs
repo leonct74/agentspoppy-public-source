@@ -18,18 +18,34 @@ import { fileURLToPath } from "node:url";
 const appDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const conf = JSON.parse(readFileSync(join(appDir, "src-tauri", "tauri.conf.json"), "utf8"));
 const version = conf.version;
-const bundle = join(appDir, "src-tauri", "target", "release", "bundle");
+// macOS ships ONE universal artifact; the arch-specific tree is the older layout and
+// still works (a plain `tauri build` writes there). Prefer universal.
+const MAC_BUILDS = [
+  { bundle: join(appDir, "src-tauri", "target", "universal-apple-darwin", "release", "bundle"), suffix: "universal" },
+  { bundle: join(appDir, "src-tauri", "target", "release", "bundle"), suffix: "aarch64" },
+];
+const macBuild =
+  MAC_BUILDS.find((b) => existsSync(join(b.bundle, "macos", "AgentsPoppy.app.tar.gz"))) ?? MAC_BUILDS[1];
+const bundle = macBuild.bundle;
 const notes = process.argv[2] ?? "";
 
 const platforms = {};
 
-// macOS (Apple Silicon): the updater consumes the .app.tar.gz + its .sig.
+// macOS: the updater consumes the .app.tar.gz + its .sig.
+//
+// The updater keys entries by ARCH, and it has no notion of a universal build — an Intel
+// Mac asks for `darwin-x86_64` and simply finds nothing if only `darwin-aarch64` is listed.
+// So a universal artifact must be published under BOTH keys, pointing at the same file.
+// (Until 0.3.1 only `darwin-aarch64` was ever emitted, which is why no Intel Mac has ever
+// been offered an update — there was no Intel build to offer.)
 const macTar = join(bundle, "macos", "AgentsPoppy.app.tar.gz");
 if (existsSync(macTar) && existsSync(`${macTar}.sig`)) {
-  platforms["darwin-aarch64"] = {
-    url: `https://github.com/leonct74/agentspoppy-releases/releases/download/v${version}/AgentsPoppy_${version}_aarch64.app.tar.gz`,
+  const entry = {
+    url: `https://github.com/leonct74/agentspoppy-releases/releases/download/v${version}/AgentsPoppy_${version}_${macBuild.suffix}.app.tar.gz`,
     signature: readFileSync(`${macTar}.sig`, "utf8").trim(),
   };
+  platforms["darwin-aarch64"] = entry;
+  if (macBuild.suffix === "universal") platforms["darwin-x86_64"] = { ...entry };
 }
 
 // Linux (AppImage channel): the updater downloads and swaps the AppImage in place.

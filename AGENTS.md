@@ -493,7 +493,27 @@ code sketch.
 you present when minting, the `port` to listen on for an `"http"` backend, and the resolved
 `account`). Your backend mints short-lived, auto-rotating, tag-scoped credentials by POSTing to
 `credentialsUrl` **with `Authorization: Bearer <credentialsToken>`** — it never sees the operator's
-own keys, and never hunts for a fixed port. See `BackendBootstrap` in `host-api.ts`.
+own keys, and never hunts for a fixed port. The host also strips the entire `AWS_*` namespace from
+your environment before starting you: there is no `AWS_PROFILE` or `AWS_ACCESS_KEY_ID` to fall back
+on, by design. See `BackendBootstrap` in `host-api.ts`.
+
+**Where to keep your files: `bootstrap.dataDir`.** The host creates a directory for you under its
+own state directory and hands you the path. Write your state there — **not** `~/.<yourname>/`. To
+give a file to the *user*, don't write to their Downloads folder either: serve the bytes from a
+one-shot `/local-download/<token>` route and let the host's browser save it, which is both the
+native-feeling path and the one that survives confinement.
+
+**Confinement — `backend.isolation: "strict"`.** Declare it and the host runs your backend under
+the runtime's permission model, allowed to read your install directory, read and write `dataDir` and
+the OS temp directory, and *nothing else on the machine*. `~/.aws/credentials`, the user's documents
+and their browser profile all return `ERR_ACCESS_DENIED`, and spawning child processes is denied
+outright (otherwise `cat ~/.aws/credentials` walks around the whole thing). Requires
+`runtime: "node22"` — a native executable has no runtime of ours inside it to enforce an allowlist,
+so the manifest validator rejects the combination rather than pretending.
+
+It is opt-in today only because poppies written before it exists would break. **Declare it.** It is
+intended to become the default and to be required for listing, and until a poppy declares it, the
+honest description of a backend is that it can read whatever the user can read.
 
 **The broker authenticates callers.** Loopback is *not* a trust boundary — every poppy's backend is
 a local process too — so the broker checks a bearer token on every request. Two classes: a per-run

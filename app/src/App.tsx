@@ -20,6 +20,7 @@ import { UpdateBanner } from "./components/UpdateBanner";
 import { Sidebar, type ActiveSection } from "./components/Sidebar";
 import { Icon } from "./components/Icon";
 import { poppyAccent } from "./lib/poppyAccent";
+import { parseDeepLink } from "./lib/deepLink";
 import type { AwsHealth } from "./components/AccountHealth";
 import { ExtensionFrame } from "./extensions/ExtensionFrame";
 import { emitHostEvent } from "./extensions/hostEvents";
@@ -31,7 +32,7 @@ type View =
   | { type: "detail"; id: string }
   | { type: "connect"; action?: "change-creds" | "redeploy" | "update-policy" }
   | { type: "activity" }
-  | { type: "directory" }
+  | { type: "directory"; focus?: string }
   | { type: "purchases" }
   | { type: "extension"; id: string };
 
@@ -259,6 +260,35 @@ export function App() {
     });
   }, [act]);
 
+  // agentspoppy:// links — the website's "Deploy for real" handoff. `onOpenUrl` also
+  // replays the launching link when the app was started BY the link (cold start).
+  // The link is untrusted input from an arbitrary web page: parseDeepLink accepts
+  // only a catalogue id, and the directory resolves that id against the curated
+  // catalogue itself — a page can point at a poppy, never define one. The import is
+  // dynamic so tests (jsdom, no Tauri IPC) never touch the plugin.
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void import("@tauri-apps/plugin-deep-link")
+      .then(async ({ onOpenUrl }) => {
+        const stop = await onOpenUrl((urls) => {
+          for (const raw of urls) {
+            const link = parseDeepLink(raw);
+            if (link) setView({ type: "directory", focus: link.id });
+          }
+        });
+        if (disposed) stop();
+        else unlisten = stop;
+      })
+      .catch(() => {
+        /* not running under Tauri (tests / plain browser) — deep links don't exist there */
+      });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
   // Remember every extension opened this session so its iframe stays alive (below).
   useEffect(() => {
     if (view.type === "extension") {
@@ -445,6 +475,7 @@ export function App() {
 
         {view.type === "directory" && (
           <DirectoryView
+            focusId={view.focus}
             onInstalled={() => {
               refreshExtensions();
               refreshUpdates();

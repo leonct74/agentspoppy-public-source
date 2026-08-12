@@ -22,6 +22,11 @@ serde_json = "1"
 tauri-plugin-notification = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+# agentspoppy:// links from the website ("Deploy for real" on a demo) land here.
+# single-instance routes a second launch's link into the running app on Win/Linux
+# (macOS delivers open-URL events to the running instance natively).
+tauri-plugin-deep-link = "2"
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 
 [profile.release]
 panic = "abort"

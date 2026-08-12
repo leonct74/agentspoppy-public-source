@@ -8,58 +8,20 @@ import { accountLabel } from "../lib/format";
 import { Disclosure } from "../components/Disclosure";
 import { Icon } from "../components/Icon";
 import { PoppySpinner } from "../components/PoppySpinner";
+import { SetupWizard } from "./SetupWizard";
+import {
+  ACCESS_POLICY_URL,
+  AWS_CLI_URL,
+  AWS_FREE_TIER_URL,
+  COMMON_REGIONS,
+  CopyPolicyButton,
+  ExtLink,
+  IAM_USERS_URL,
+  openExternal,
+} from "./connectShared";
 
 function msg(e: unknown, fallback: string): string {
   return e instanceof ApiError ? e.message : fallback;
-}
-
-const AWS_FREE_TIER_URL = "https://aws.amazon.com/free";
-const AWS_CLI_URL = "https://aws.amazon.com/cli/";
-const IAM_USERS_URL = "https://console.aws.amazon.com/iam/home#/users";
-const ACCESS_POLICY_URL =
-  "https://github.com/leonct74/agentspoppy/blob/main/infra/policies/agentspoppy-access-policy.json";
-
-const COMMON_REGIONS = [
-  "us-east-1",
-  "us-east-2",
-  "us-west-2",
-  "eu-west-1",
-  "eu-central-1",
-  "eu-west-2",
-  "ap-southeast-1",
-  "ap-southeast-2",
-  "ap-northeast-1",
-];
-
-const isTauri = (): boolean => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-
-function openExternal(url: string): void {
-  if (isTauri()) {
-    void import("@tauri-apps/api/core")
-      .then(({ invoke }) => invoke("plugin:opener|open_url", { url, with: null }))
-      .catch(() => {});
-  } else {
-    window.open(url, "_blank", "noopener");
-  }
-}
-
-function ExtLink({ href, children, className }: { href: string; children: ReactNode; className?: string }) {
-  return (
-    <a
-      className={className}
-      href={href}
-      target="_blank"
-      rel="noreferrer"
-      onClick={(e) => {
-        if (isTauri()) {
-          e.preventDefault();
-          openExternal(href);
-        }
-      }}
-    >
-      {children}
-    </a>
-  );
 }
 
 type StepState = "done" | "active" | "locked";
@@ -86,6 +48,18 @@ export interface ConnectAwsViewProps {
  * dedicated NON-admin operator — AgentsPoppy never asks for or uses admin.
  */
 export function ConnectAwsView({ accounts, onBack, onChanged, initialAction }: ConnectAwsViewProps) {
+  // WIZARD is the default (founder direction 2026-08-11: the five-step stepper frustrated
+  // most users — even we avoided testing it). Pro is the landing mode only for management
+  // deep-links (change-creds / redeploy / update-policy) and for accounts already fully set
+  // up; either way the two modes stay one click apart in both directions.
+  const [mode, setMode] = useState<"wizard" | "pro">(() =>
+    initialAction || accounts[0]?.roleArn ? "pro" : "wizard",
+  );
+  // True when the user ASKED for the wizard (banner switch, "use a different account").
+  // The wizard's completed-account handoff is suppressed then: right after an unlink the
+  // accounts prop is momentarily stale (still carrying the old roleArn), and the handoff
+  // would bounce the user straight back to the pro view they just left.
+  const [wizardExplicit, setWizardExplicit] = useState(false);
   const [identity, setIdentity] = useState<CallerIdentity | null>(null);
   const [identityError, setIdentityError] = useState<string | null>(null);
   const [checking, setChecking] = useState(true);
@@ -346,6 +320,21 @@ export function ConnectAwsView({ accounts, onBack, onChanged, initialAction }: C
 
   const cfnUrl = `https://${region}.console.aws.amazon.com/cloudformation/home?region=${region}#/stacks/create`;
 
+  if (mode === "wizard") {
+    return (
+      <SetupWizard
+        accounts={accounts}
+        identity={identity}
+        checking={checking}
+        onChanged={onChanged}
+        onBack={onBack}
+        onDone={onBack}
+        onProSwitch={() => setMode("pro")}
+        completedHandsOffToPro={!wizardExplicit}
+      />
+    );
+  }
+
   return (
     <section className="connect">
       <button className="btn link" onClick={onBack}>
@@ -363,6 +352,26 @@ export function ConnectAwsView({ accounts, onBack, onChanged, initialAction }: C
         </span>
       </header>
 
+      {/* The escape hatch the field reports asked for: anyone tangled in the pro steps can
+          hand the rest to the wizard — it resumes from wherever the account actually is.
+          Hidden once setup is complete (re-running the wizard there would just rotate the
+          operator key for nothing) and on management deep-links. */}
+      {!initialAction && !hasRole && (
+        <div className="banner wiz-return">
+          Feeling lost? The <strong>setup wizard</strong> can do all of this automatically.{" "}
+          <button
+            className="btn link"
+            type="button"
+            onClick={() => {
+              setWizardExplicit(true);
+              setMode("wizard");
+            }}
+          >
+            Switch to the wizard
+          </button>
+        </div>
+      )}
+
       {/* Landed here from a detected policy gap (e.g. after an update that needs a new permission):
           hand the user the exact current policy to copy + a one-click re-check, so the fix is
           "replace your IAM user's policy with this" — nothing to rebuild. */}
@@ -373,10 +382,11 @@ export function ConnectAwsView({ accounts, onBack, onChanged, initialAction }: C
           your account, role and region all stay exactly as they are.
           <ol className="substeps">
             <li>
+              <CopyPolicyButton /> — or{" "}
               <ExtLink href={ACCESS_POLICY_URL}>
-                Open the latest AgentsPoppy policy <Icon name="external" className="link-ext" />
-              </ExtLink>{" "}
-              and copy the whole file.
+                open it on GitHub <Icon name="external" className="link-ext" />
+              </ExtLink>
+              .
             </li>
             <li>
               In AWS: <strong>IAM → Users → your user</strong> → open the AgentsPoppy policy, <strong>replace</strong>{" "}
@@ -518,11 +528,12 @@ export function ConnectAwsView({ accounts, onBack, onChanged, initialAction }: C
                   </p>
                   <ol className="substeps">
                     <li>
-                      Add a user and attach the scoped{" "}
+                      Add a user and attach the scoped AgentsPoppy access policy —{" "}
+                      <CopyPolicyButton /> or{" "}
                       <ExtLink href={ACCESS_POLICY_URL}>
-                        AgentsPoppy access policy <Icon name="external" className="link-ext" />
+                        view it on GitHub <Icon name="external" className="link-ext" />
                       </ExtLink>{" "}
-                      (or <strong>AdministratorAccess</strong>, if you prefer) — the scoped one lets the one-time
+                      (or use <strong>AdministratorAccess</strong>, if you prefer) — the scoped one lets the one-time
                       setup create AgentsPoppy's own role + operator and nothing else, and you can revoke it any
                       time.
                     </li>
@@ -621,6 +632,10 @@ export function ConnectAwsView({ accounts, onBack, onChanged, initialAction }: C
                     setRoleArn("");
                     setUseOwnKeys(false);
                     onChanged();
+                    // Connecting a DIFFERENT account is onboarding again — hand it to the
+                    // wizard, the default surface for that. Pro stays one click away there.
+                    setWizardExplicit(true);
+                    setMode("wizard");
                   })
                 }
               >
@@ -1017,10 +1032,11 @@ export function ConnectAwsView({ accounts, onBack, onChanged, initialAction }: C
                 </p>
                 <ol className="substeps">
                   <li>
+                    <CopyPolicyButton /> — or{" "}
                     <ExtLink href={ACCESS_POLICY_URL}>
-                      Open the latest AgentsPoppy policy <Icon name="external" className="link-ext" />
-                    </ExtLink>{" "}
-                    and copy the whole file.
+                      open it on GitHub <Icon name="external" className="link-ext" />
+                    </ExtLink>
+                    .
                   </li>
                   <li>
                     In AWS: <strong>IAM → Users → your user</strong> → open the AgentsPoppy policy, <strong>replace</strong>{" "}

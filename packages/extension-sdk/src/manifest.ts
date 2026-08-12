@@ -51,7 +51,26 @@ export interface ExtensionBackend {
   transport?: BackendTransport;
   /** The runtime this backend needs. Defaults to "native". */
   runtime?: BackendRuntime;
+  /**
+   * How far the host confines this backend's access to the user's machine.
+   *
+   * - `"strict"` → the host runs it under the runtime's permission model with an
+   *   allowlist of exactly three places: its own install directory (read), the data
+   *   directory the host assigns it in {@link BackendBootstrap.dataDir} (read/write),
+   *   and the OS temp directory (read/write). Everything else on the machine —
+   *   `~/.aws/credentials` above all — is denied by the runtime, and spawning child
+   *   processes is denied outright. Requires `runtime: "node22"`.
+   * - `"none"` (the default today) → no confinement beyond the OS user's own
+   *   permissions, which is to say: it can read whatever you can read.
+   *
+   * The default is `"none"` only for compatibility with poppies written before this
+   * existed. It is intended to become the default, and to be required for listing.
+   */
+  isolation?: BackendIsolation;
 }
+
+/** See {@link ExtensionBackend.isolation}. */
+export type BackendIsolation = "strict" | "none";
 
 /**
  * An optional cleanup hook for resources a poppy creates OUTSIDE its CloudFormation
@@ -147,6 +166,15 @@ export function validateManifest(value: unknown): ManifestValidationResult {
     }
     if (b.runtime !== undefined && b.runtime !== "node22" && b.runtime !== "native") {
       errors.push('backend.runtime must be "node22" or "native"');
+    }
+    if (b.isolation !== undefined && b.isolation !== "strict" && b.isolation !== "none") {
+      errors.push('backend.isolation must be "strict" or "none"');
+    }
+    // A native executable is opaque to us: there is no runtime of ours inside it to
+    // enforce an allowlist. Claiming confinement we cannot deliver would be worse than
+    // not offering it, so the combination is rejected rather than silently ignored.
+    if (b.isolation === "strict" && b.runtime !== "node22") {
+      errors.push('backend.isolation "strict" requires backend.runtime "node22" — a native executable cannot be confined by the host');
     }
   }
 

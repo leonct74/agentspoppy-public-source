@@ -12,6 +12,12 @@ import { buyerId, commerceBase, setCommerceBase, formatPrice, checkEntitlement, 
 export interface DirectoryViewProps {
   /** A poppy just landed — refresh the host's extension list right away (don't wait on the poll). */
   onInstalled: () => void;
+  /**
+   * Catalogue id to spotlight — set when an agentspoppy://install link landed us here
+   * (the website's "Deploy for real" handoff). Untrusted input: an id the catalogue
+   * doesn't contain just shows a plain notice.
+   */
+  focusId?: string;
   /** Open an installed poppy's tab (by extension id). */
   onOpenPoppy: (extensionId: string) => void;
   /** A poppy was just uninstalled — refresh + close its tab if it was open. */
@@ -29,7 +35,7 @@ function monogram(name: string): string {
  * links its open repository (the audit affordance); installing downloads, verifies
  * and unpacks the package broker-side, so this view only asks and reports.
  */
-export function DirectoryView({ onInstalled, onOpenPoppy, onUninstalled, onUpdated }: DirectoryViewProps) {
+export function DirectoryView({ onInstalled, onOpenPoppy, onUninstalled, onUpdated, focusId }: DirectoryViewProps) {
   const [catalog, setCatalog] = useState<DirectoryCatalogView | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -109,6 +115,14 @@ export function DirectoryView({ onInstalled, onOpenPoppy, onUninstalled, onUpdat
       cancelled = true;
     };
   }, [catalog]);
+
+  // Deep-link landing: once the catalogue is on screen, bring the linked poppy's card
+  // into view. (The card also gets a highlight class in the grid below.)
+  useEffect(() => {
+    if (!focusId || !catalog) return;
+    // Optional-called: jsdom (tests) has no scrollIntoView.
+    document.getElementById(`poppy-card-${focusId}`)?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+  }, [focusId, catalog]);
 
   // Stop any in-flight purchase poll on unmount.
   useEffect(
@@ -287,6 +301,15 @@ export function DirectoryView({ onInstalled, onOpenPoppy, onUninstalled, onUpdat
         poppy does before you install it.
       </p>
 
+      {/* The followed link named a poppy this catalogue doesn't have. The id is untrusted
+          (any web page can fire an agentspoppy:// link), so this is a calm notice, not an error. */}
+      {focusId && catalog && !catalog.poppies.some((p) => p.id === focusId) && (
+        <div className="banner">
+          The link you followed points at “{focusId}”, which isn&apos;t in the catalogue right now.
+          Browse the listings below instead.
+        </div>
+      )}
+
       {installError && <div className="banner banner-error">{installError}</div>}
       {buyError && <div className="banner banner-error">{buyError}</div>}
       {updateNotice && (
@@ -314,7 +337,11 @@ export function DirectoryView({ onInstalled, onOpenPoppy, onUninstalled, onUpdat
           <div className="os-group">
             <div className="os-grid">
               {catalog.poppies.map((p) => (
-                <div key={p.id} className="os-card">
+                <div
+                  key={p.id}
+                  id={`poppy-card-${p.id}`}
+                  className={p.id === focusId ? "os-card os-card--focus" : "os-card"}
+                >
                   <div className="os-card-head">
                     <span className="os-avatar" aria-hidden="true">
                       {p.icon ? <img src={p.icon} alt="" /> : monogram(p.name)}

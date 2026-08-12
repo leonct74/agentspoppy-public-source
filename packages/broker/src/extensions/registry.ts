@@ -19,11 +19,12 @@
  */
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { basename, dirname, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import type { Connection, ConnectionStatus, PermissionGrant } from "@agentspoppy/core";
 import type { BackendBootstrap, Capability, ExtensionManifest } from "@agentspoppy/extension-sdk";
 import type { BrokerService } from "../service";
 import { generateToken } from "../auth";
+import { agentsPoppyHome } from "../store";
 import { type BackendHost, type BackendProcess, NodeBackendHost } from "./backend-host";
 
 /**
@@ -473,8 +474,27 @@ export class ExtensionRegistry {
       credentialsUrl: `${this.brokerBaseUrl}/connections/${encodeURIComponent(conn.id)}/credentials`,
       credentialsToken: generateToken(),
       port,
+      dataDir: await this.dataDirFor(manifest.id),
       account: { accountId: account.accountId, region: account.regions[0] ?? "us-east-1" },
     };
+  }
+
+  /**
+   * The directory a poppy keeps its own files in — created by the host, named after the
+   * poppy, and under the host's state directory rather than the user's home.
+   *
+   * This exists so a poppy has somewhere to write that is not `~/.<its-name>/`. Under
+   * `backend.isolation: "strict"` it is the only place it may write at all, so it has to
+   * exist before the process starts.
+   */
+  private async dataDirFor(extensionId: string): Promise<string> {
+    const { mkdir } = await import("node:fs/promises");
+    // The id is a reverse-DNS string from a validated manifest, but this path is handed to
+    // a filesystem: keep it to characters that cannot climb out of the parent.
+    const safe = extensionId.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const dir = join(agentsPoppyHome(), "extension-data", safe);
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    return dir;
   }
 }
 

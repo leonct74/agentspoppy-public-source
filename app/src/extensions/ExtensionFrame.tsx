@@ -15,10 +15,20 @@
  * Its intended door to anything privileged is the postMessage bridge wired here — every
  * call is gated by `handleHostRequest` against the extension's manifest-declared
  * `capabilities` before the host bridge runs (the app-side counterpart to the SDK's
- * createHostBridgeClient). Hard isolation against a HOSTILE extension (which, being
- * same-origin to the loopback broker, could try the broker API directly) is the open
- * caller-auth question tracked in the broker brief, not solved here; today's extensions
- * are first-party and the bridge is defense-in-depth.
+ * createHostBridgeClient).
+ *
+ * A hostile frontend can skip the bridge and call the broker's HTTP API directly, since it
+ * is same-origin to the loopback broker. That used to be an open question; it is now closed
+ * by caller auth (`broker/src/auth.ts`, one gate in `http.ts`). The frame holds no token —
+ * the host token goes only to this app, the credentials token only to a backend's bootstrap
+ * — so it authenticates as `anonymous`, and every route except static assets (`/ext-ui/*`)
+ * and single-use download tokens (`/ext-dl/*`) answers 401. It cannot mint credentials, list
+ * connections, or touch another poppy.
+ *
+ * What the frame CAN do is what any web page can: talk to the network. It holds no cloud
+ * credentials — those are minted into a poppy's BACKEND, never here — and it has no
+ * filesystem, no subprocesses and no environment, because the browser engine provides none
+ * of those APIs. For a frontend-only poppy that is the entire threat surface.
  */
 import { useEffect, useRef } from "react";
 import { type Capability, type HostBridge, type HostRequest, handleHostRequest } from "@agentspoppy/extension-sdk";
