@@ -16,11 +16,11 @@ and that the user can pause or tear down at any time.
 
 Before writing any code, read these and follow them exactly:
 - The build guide (read it fully — its rules are a hard contract, not style advice):
-  https://github.com/leonct74/agentspoppy-public-source/blob/main/AGENTS.md
+  https://github.com/leonct74/agentspoppy/blob/main/AGENTS.md
 - The clone-and-go example to copy:
-  https://github.com/leonct74/agentspoppy-public-source/tree/main/examples/hello-poppy
+  https://github.com/leonct74/agentspoppy/tree/main/examples/hello-poppy
 - The SDK reference:
-  https://github.com/leonct74/agentspoppy-public-source/blob/main/packages/extension-sdk/README.md
+  https://github.com/leonct74/agentspoppy/blob/main/packages/extension-sdk/README.md
 
 Non-negotiable rules (from AGENTS.md):
 - Build ON AgentsPoppy; never clone or rebrand it, and never call yours "AgentsPoppy" or plain

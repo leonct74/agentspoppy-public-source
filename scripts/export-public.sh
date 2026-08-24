@@ -59,10 +59,18 @@ FORBIDDEN=(
 # this script is itself exported. (The first sync attempt failed on exactly
 # that, which is the gate working.)
 DENYLIST_FILE="scripts/export-denylist.txt"
+# A missing denylist must ABORT, never quietly export with the scrub gate off.
+# It went missing twice on 2026-08-24; an empty FORBIDDEN_STRINGS would have
+# printed "gates passed" while scrubbing nothing.
+if [ ! -f "$DENYLIST_FILE" ]; then
+  echo "FATAL: $DENYLIST_FILE is missing — it holds the identifiers that must never" >&2
+  echo "       be published, and its absence silently disables the scrub gate." >&2
+  exit 1
+fi
 FORBIDDEN_STRINGS=()
 if [ -f "$DENYLIST_FILE" ]; then
   while IFS= read -r line; do
-    [[ -z "$line" || "$line" == \#* ]] && continue
+    [[ -z "$line" || "$line" == \#* || "$line" == path:* ]] && continue
     FORBIDDEN_STRINGS+=("$line")
   done < "$DENYLIST_FILE"
 fi
