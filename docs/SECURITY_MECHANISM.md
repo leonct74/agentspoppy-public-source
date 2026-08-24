@@ -150,7 +150,7 @@ Two channels, and they close differently:
 | Channel | Status |
 |---|---|
 | **Environment** — `AWS_*` inherited from the process that launched AgentsPoppy | **Closed.** `poppyEnv()` in `extensions/backend-host.ts` strips the entire `AWS_*` namespace from every spawned backend's environment. The whole prefix rather than a list of known names, so a variable AWS invents later is covered by construction. Enforced by a real-spawn test. |
-| **Filesystem** — reading `~/.aws/credentials` directly | **Closed for every listed poppy (2026-08-20).** A backend declaring `backend.isolation: "strict"` runs under the runtime's permission model and is denied every path outside its own three (below). Every first-party poppy with a backend now declares it (see below), and an unconfined backend is refused at listing review (RUNTIMES.md R7). **Since 0.3.5 the field itself defaults to `"strict"`**: omitting it confines the backend, and running unconfined requires writing `"isolation": "none"` deliberately. Three independent gates then refuse that: the manifest validator exits non-zero, the submissions API rejects the listing server-side (re-reading the manifest from the uploaded bytes), and the mechanical update review refuses a `strict`→`none` downgrade. The host additionally logs an explicit unconfined-start warning. The one sanctioned exception is a named, one-release data migration (docs/CONFINEMENT-MIGRATION.md). |
+| **Filesystem** — reading `~/.aws/credentials` directly | **Closed for every listed poppy (2026-08-20).** A backend declaring `backend.isolation: "strict"` runs under the runtime's permission model and is denied every path outside its own three (below). Every first-party poppy with a backend now declares it (see below), and an unconfined backend is refused at listing review (RUNTIMES.md R7). **Since 0.3.5 the field itself defaults to `"strict"`**: omitting it confines the backend, and running unconfined requires writing `"isolation": "none"` deliberately. Three independent gates then refuse that: the manifest validator exits non-zero, the submissions API rejects the listing server-side (re-reading the manifest from the uploaded bytes), and the mechanical update review refuses a `strict`→`none` downgrade. The host additionally logs an explicit unconfined-start warning. The one sanctioned exception is a named, one-release data migration (docs/CONFINEMENT.md). |
 
 **Why the environment one mattered.** Nothing had to go wrong for it to leak: a developer
 who exports `AWS_ACCESS_KEY_ID` in the shell they launch AgentsPoppy from was handing every
@@ -188,7 +188,7 @@ Two implementation notes that cost time to find:
 
 **The migration is DONE (2026-08-20) — every listed first-party poppy with a backend is
 confined in production.** The three classes of work it took (the full record, per poppy and
-per release, is `docs/CONFINEMENT-MIGRATION.md`):
+per release, is `docs/CONFINEMENT.md`):
 
 1. **The local `~/.aws` credential plane retired.** MailPoppy's backend read and wrote
    `~/.aws/credentials` (`awsProfile.ts`) — benign in intent, precisely the capability this
@@ -231,7 +231,7 @@ whole section is moot. A backend should be an exception a poppy justifies, not t
 **The manifest defaults were flipped in 0.3.5**: `backend.runtime` now defaults to `"node22"`
 and `backend.isolation` to `"strict"`, so a poppy that never thinks about confinement gets the
 confined combination rather than the opaque one (it was `"native"` + unconfined while the
-pre-confinement fleet migrated — see `docs/CONFINEMENT-MIGRATION.md`). What remains is that the
+pre-confinement fleet migrated — see `docs/CONFINEMENT.md`). What remains is that the
 fact a poppy ships a backend at all is **still not surfaced in the risk rating** — a user
 approving a connection sees a careful breakdown of AWS grants and no mention that native
 code is about to run on their machine. For this threat that line matters more than any
@@ -241,7 +241,7 @@ single grant.
 
 - **2026-08-20** — §6.1's filesystem channel CLOSED fleet-wide. Every listed first-party
   poppy with a backend runs `isolation: "strict"` in production (per-poppy record:
-  `docs/CONFINEMENT-MIGRATION.md`); RUNTIMES.md R7 makes an unconfined backend a listing
+  `docs/CONFINEMENT.md`); RUNTIMES.md R7 makes an unconfined backend a listing
   refusal, enforced server-side in the mechanical update review and the admin approve
   route (`agentspoppy-web`); the update AND new first-install audit prompts command the
   user's AI agent to verify the flag (`app/src/lib/updateAudit.ts`); `UpdatePreview`

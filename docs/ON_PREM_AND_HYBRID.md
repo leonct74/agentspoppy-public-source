@@ -95,8 +95,7 @@ Azure and Google are **stronger candidates than on-premises**, because both have
 Google's **credential access boundary** is the closest thing to a session policy outside AWS, and
 Azure's ABAC conditions cover the attribution half. Neither is a like-for-like mapping — the
 **transitive** property (created resources automatically inheriting the caller's identity) is the
-part that needs the most design work on both, and it is also the part the patent turns on. Expect
-per-cloud research, not a translation layer.
+part that needs the most design work on both. Expect per-cloud research, not a translation layer.
 
 **Sequencing view:** a second cloud broadens the market more than on-prem does and preserves the
 guarantee. On-prem Kubernetes should follow it, not precede it.
@@ -178,7 +177,5 @@ from the fact that the broker runs locally.
 5. **Never ship a proxy mode under the same promise.** If vSphere or similar is ever built, label
    it broker-enforced and say plainly what that means.
 
-⚠️ **Ask counsel before writing on-prem or multi-cloud code.** The provisionals are drafted around
-cloud primitives (transitive session tags, session policies). A Kubernetes or Azure/GCP variant may
-fall outside their scope, and the non-provisional is the moment to decide how wide the claims should
-reach. See [[agentspoppy-patent]] notes.
+⚠️ **Ask counsel before writing on-prem or multi-cloud code.** There are intellectual-property
+questions to settle before a port, and they are not engineering questions.

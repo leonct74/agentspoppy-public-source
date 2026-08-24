@@ -102,21 +102,13 @@ rm -f "$STAGING/$DENYLIST_FILE"
 # The trap this closes: the whitelist gates new TOP-LEVEL paths, but a new file
 # inside an already-whitelisted directory (docs/) publishes itself on the next
 # sync with no decision from anyone. AUDIT-2026-08-16.md nearly did exactly that.
-INTERNAL_ONLY=(
-  "docs/AUDIT-2026-08-16.md"
-  # A migration PLAN, written before the thing it plans shipped. It names an
-  # unreleased poppy, cites commits that were never pushed, discloses an unfixed
-  # weakness in a shipped poppy, leaks 38 absolute paths from the author's own
-  # machine — and, worst for a repo people read to check our claims, describes
-  # the pre-flip world in the present tense ("Today the default is unconfined").
-  # Published 2026-08-24 by mistake; an external auditor quoted it back the same
-  # day as proof confinement was still opt-in. The shipped truth lives in
-  # SECURITY_MECHANISM.md and RUNTIMES.md, which are current.
-  "docs/CONFINEMENT-MIGRATION.md"
-)
-for f in "${INTERNAL_ONLY[@]}"; do
-  rm -f "$STAGING/$f"
-done
+# Internal-only paths live in the denylist file, which is deleted from the export
+# above — naming them here would publish the fact that we withhold an audit, and
+# its date, in the very file a reader can see. One path per line, "path:" prefix.
+while IFS= read -r line; do
+  [[ "$line" == path:* ]] || continue
+  rm -f "$STAGING/${line#path:}"
+done < <(cat "$DENYLIST_FILE" 2>/dev/null || true)
 
 # Belt and braces: any docs/ file whose name marks it internal is dropped too, so
 # the next audit or postmortem cannot leak by being new rather than listed.
@@ -155,6 +147,20 @@ STRAY=$(grep -rhoIE --exclude-dir=.git --exclude='*.lock' --exclude='package-loc
 if [ -n "$STRAY" ]; then
   echo "$STRAY" | sed 's/^/  /' >&2
   fail "12-digit value(s) above are not known documentation account ids — check them"
+fi
+
+# ---- Internal-content gate --------------------------------------------------
+# A filename sweep is not a guard: docs/CONFINEMENT-MIGRATION.md slipped through
+# the name-based one in the very commit that added it, because it was not called
+# AUDIT-*. These match on what internal documents CONTAIN, which is far harder to
+# get wrong by accident: a path from a developer's own machine, an unpushed
+# commit, or a reference to a repo that is not public.
+INTERNAL_SIGNALS=$(grep -rInE --exclude-dir=.git --include='*.md' \
+  '/Users/[a-z]+/Projects|local, not (pushed|released)|founder says|agentspoppy-web/src|mailpoppy/apps/web' \
+  "$STAGING" | grep -v 'internal-content-ok' || true)
+if [ -n "$INTERNAL_SIGNALS" ]; then
+  echo "$INTERNAL_SIGNALS" | head -20 | sed 's/^/  /' >&2
+  fail "the file(s) above read as INTERNAL notes (developer paths / unpushed commits / private repos) — publish a rewritten version or add the path to the denylist"
 fi
 
 # ---- Claim gate: the mirror must not contradict what shipped ----------------

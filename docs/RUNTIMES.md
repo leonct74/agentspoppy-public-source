@@ -98,7 +98,7 @@ Conclusion: **runtime provisioning is the platform's job. Poppies declare; they 
   confined successor identified in the release notes. Every first-party poppy with a backend is
   strict as of 2026-08-20 (CrewPoppy 0.9.3, MailPoppy 0.1.17, VM-Poppy 0.1.12, TrafficPoppy
   0.2.4, LiveOpsPoppy 0.3.2; VPN-Poppy 0.1.9 pending its migrator gate). Migration record:
-  `docs/CONFINEMENT-MIGRATION.md`.
+  `docs/CONFINEMENT.md`.
 
 **Explicitly rejected alternative:** using the *user's system* Node. It may be absent, the
 wrong major, or unvetted; running poppy code on an arbitrary PATH interpreter is a support
