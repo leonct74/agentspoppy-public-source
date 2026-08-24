@@ -35,6 +35,22 @@ Non-negotiable rules (from AGENTS.md):
   existing resource must be scoped to "tagged-as-self" or a name/ARN pattern you own — NEVER "*".
 - Least privilege: declare the specific actions you need, not "service:*". Tag everything you
   create so it's attributable and tear-down-able. Never request admin.
+- CONFINED FROM THE USER'S FILES — mandatory, and a listing requirement (an unconfined backend is
+  REJECTED at review): if your poppy has a backend, its manifest MUST declare
+  "backend": { ..., "runtime": "node22", "isolation": "strict" }. The host then runs it under
+  Node's permission model: it can read its own install folder and write ONLY the private data
+  folder the host hands it (`bootstrap.dataDir`) and the OS temp dir — the user's home directory
+  (~/.aws/credentials included) is denied BY THE RUNTIME, and child processes / worker threads /
+  native addons are denied outright. Design for it from the first line:
+    • keep ALL state in `bootstrap.dataDir`, never in `~/.<yourname>/` or any home path;
+    • to give the user a file, never write their Downloads/Documents folders — stage the bytes
+      under a one-shot token on a `GET /local-download/:token` route and open
+      `/ext-dl/<your-id>/local-download/<token>` via host.openExternal (the system browser saves
+      it); to RECEIVE a file, use a frontend `<input type="file">` picker and send its CONTENT
+      (pickers work in the sandbox; the user hands you one file — you never browse their disk);
+    • never spawn a child process or a worker — pure Node in one process;
+    • trap: under the permission model `fs.existsSync` on a DENIED path THROWS instead of
+      returning false — wrap existence probes in try/catch (treat a throw as "not there").
 - Leave no trace: the user must be able to remove EVERYTHING you build, from AgentsPoppy, in one
   click. Put all your resources in ONE CloudFormation stack and tag them, so deleting the stack
   removes them. If you create anything outside a stack (DNS records, account-level identities), tag
@@ -124,7 +140,9 @@ How to do it:
 2. Declare your permissionSet (least-privilege, scoped as above) and ONLY the capabilities you use.
 3. Build the frontend (it talks to the host only through the capability-gated bridge). Add a backend
    only if you need server-side AWS work — it receives scoped credentials via the injected
-   AGENTSPOPPY_BOOTSTRAP env var, never the user's own keys.
+   AGENTSPOPPY_BOOTSTRAP env var, never the user's own keys, and it runs CONFINED (keep
+   `"runtime": "node22", "isolation": "strict"` from the example; state goes in
+   `bootstrap.dataDir`; files reach the user via the one-shot `/local-download` token).
 4. Validate the manifest: `npm run validate-manifest -- path/to/extension.json` must pass.
 5. Install it (scripts/install-dev-extension.mjs), open it in AgentsPoppy, and confirm it rates
    AMBER or GREEN with "No risks to other resources identified." A RED rating means a grant is too

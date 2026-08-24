@@ -27,8 +27,10 @@
     "entry": "frontend/index.html"
   },
   "backend": {
-    "entry": "backend/server.mjs",
-    "transport": "http"
+    "entry": "backend/server.cjs",
+    "transport": "http",
+    "runtime": "node22",
+    "isolation": "strict"
   },
   "capabilities": [
     "connection:read",

@@ -15,7 +15,7 @@
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { validateManifest, type ExtensionManifest } from "@agentspoppy/extension-sdk";
+import { validateManifest, type ExtensionManifest, effectiveIsolation } from "@agentspoppy/extension-sdk";
 
 function fail(...lines: string[]): never {
   for (const l of lines) console.error(l);
@@ -72,11 +72,30 @@ if (feedbackProblems.length > 0) {
   );
 }
 
+// Confinement (RUNTIMES.md R7): a backend must declare isolation "strict" to be listable.
+// A structural warning here, so the developer hears it on THEIR machine first — the listing
+// review enforces it for real (the only sanctioned exception is a named one-release migration).
+// An unconfined backend is a hard failure, not advice. Before 0.3.5 this printed a
+// warning and exited 0, so the only thing standing between an unconfined poppy and a
+// user was a human remembering to read the output — and an external audit in Aug 2026
+// correctly reported the platform as "confinement is opt-in" on the strength of it.
+if (m.backend && effectiveIsolation(m.backend) === "none") {
+  console.error(
+    `✗ ${m.id} — backend is NOT confined ("isolation": "none"): it runs with the user's full
+  file access, including ~/.aws/credentials. This package cannot be listed (RUNTIMES.md R7),
+  and the submissions API refuses it server-side. Declare "runtime": "node22" +
+  "isolation": "strict", keep state in bootstrap.dataDir, and hand files out via a one-shot
+  /local-download token (see examples/hello-poppy). The single sanctioned exception is a
+  named, one-release data migration — see docs/CONFINEMENT-MIGRATION.md.`,
+  );
+  process.exit(1);
+}
+
 const grants = m.permissionSet.grants.length;
 console.log(`✓ ${m.id} v${m.version} — valid`);
 console.log(
   `  ${grants} grant${grants === 1 ? "" : "s"} · capabilities: ${m.capabilities.join(", ") || "none"} · ` +
-    (m.backend ? `backend: ${m.backend.transport ?? "http"}` : "frontend-only"),
+    (m.backend ? `backend: ${m.backend.transport ?? "http"}${m.backend.isolation === "strict" ? " · confined" : ""}` : "frontend-only"),
 );
 console.log(
   `  Structural check only — install it and confirm the rating is amber/green in AgentsPoppy (AGENTS.md §3).`,

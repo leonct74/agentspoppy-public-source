@@ -11,7 +11,7 @@ import { BrokerService, BrokerError } from "../service";
 import { StubActivityProvider, StubCloudProvider, StubCredentialVendor } from "../providers";
 import { StubAwsBootstrap } from "../aws";
 import { ExtensionRegistry } from "./registry";
-import { DirectoryService, httpFetchBytes, versionAtLeast } from "./directory";
+import { DirectoryService, httpFetchBytes, renameWithRetry, versionAtLeast } from "./directory";
 import { buildZip } from "./zip.fixtures";
 
 const POPPY_ID = "com.example.testpoppy";
@@ -160,8 +160,13 @@ describe("DirectoryService", () => {
     expect(out).toEqual({ ok: true, extensionId: POPPY_ID });
 
     expect(await fs.readFile(join(root, POPPY_ID, "frontend/index.html"), "utf8")).toBe("<html>poppy</html>");
-    const mode = (await fs.stat(join(root, POPPY_ID, "backend/bin"))).mode;
-    expect(mode & 0o111).toBeTruthy(); // executable after install
+    // The install chmods the backend executable — but Windows has no execute bit, so
+    // assert the POSIX guarantee only where it exists (the file itself must exist on all).
+    expect(await fs.stat(join(root, POPPY_ID, "backend/bin"))).toBeTruthy();
+    if (process.platform !== "win32") {
+      const mode = (await fs.stat(join(root, POPPY_ID, "backend/bin"))).mode;
+      expect(mode & 0o111).toBeTruthy(); // executable after install
+    }
     expect(registry.has(POPPY_ID)).toBe(true);
     expect(await stagingDirs()).toEqual([]);
     // Installing must not start the poppy: no connection was created for it.
@@ -756,5 +761,47 @@ describe("httpFetchBytes (resilient downloader)", () => {
       /the server said 404/,
     );
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+// The Windows sharing-violation shield on the update swap (field bug 2026-08-22: a
+// poppy update failed EBUSY because the just-stopped backend still held its install
+// dir). The retry must absorb TRANSIENT EBUSY/EPERM, give up on persistent ones, and
+// never mask a genuinely different error.
+describe("renameWithRetry", () => {
+  const errWith = (code: string) => {
+    const e = new Error(code) as NodeJS.ErrnoException;
+    e.code = code;
+    return e;
+  };
+
+  it("retries EBUSY/EPERM and succeeds once the lock clears", async () => {
+    let calls = 0;
+    const flaky = async () => {
+      calls++;
+      if (calls < 4) throw errWith(calls % 2 ? "EBUSY" : "EPERM");
+    };
+    await renameWithRetry("a", "b", flaky, 0);
+    expect(calls).toBe(4);
+  });
+
+  it("gives up after bounded attempts and rethrows the real error", async () => {
+    let calls = 0;
+    const stuck = async () => {
+      calls++;
+      throw errWith("EBUSY");
+    };
+    await expect(renameWithRetry("a", "b", stuck, 0)).rejects.toThrow("EBUSY");
+    expect(calls).toBe(20); // MAX_RENAME_ATTEMPTS — bounded, but generous enough for an AV scan
+  });
+
+  it("does not retry unrelated errors", async () => {
+    let calls = 0;
+    const gone = async () => {
+      calls++;
+      throw errWith("ENOENT");
+    };
+    await expect(renameWithRetry("a", "b", gone, 0)).rejects.toThrow("ENOENT");
+    expect(calls).toBe(1);
   });
 });

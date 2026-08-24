@@ -18,7 +18,7 @@ risk is presented to the user. It is the reference both codebases adhere to.
 
 | | **AgentsPoppy** (broker) | **A poppy** (e.g. MailPoppy) |
 |---|---|---|
-| Holds AWS credentials | Yes — locally, never leaves the machine | No |
+| Holds AWS credentials | Yes — the long-lived operator key, locally (0600), never transmitted | Only short-lived, scoped credentials it mints per connection — never the operator key |
 | Talks to AWS | Only to **vend** creds (STS AssumeRole) + **govern** (inventory/teardown with operator creds) | Yes — calls AWS **directly** with the vended creds |
 | Knows about the other | Agnostic — knows nothing app-specific | Declares its needs + imports `@agentspoppy/client` |
 | Decides what's allowed | Enforces the user's approval | Requests; cannot widen its own grant |
@@ -55,22 +55,29 @@ preserve all of them.
   for `*` on a mutating action it can avoid. Over-asking is a defect: it alarms the user during
   scrutiny and undermines the whole pitch.
 
-- **I3 — Attribution is mandatory.**
-  Every resource a poppy creates carries the three tags
-  `agentspoppy:account`, `agentspoppy:app`, `agentspoppy:connection`. These are vended as
-  **transitive STS session tags** so anything created in the session is stamped — which is what
-  makes both tag-scoping (I1) and teardown (I6) real.
+- **I3 — Attribution is enforced where tags are the scope.**
+  Every resource a poppy creates is expected to carry the three tags
+  `agentspoppy:account`, `agentspoppy:app`, `agentspoppy:connection`. They are vended as
+  **transitive STS session tags**, and on tag-scoped creates the birth-tag condition
+  (`aws:RequestTag`) makes AWS refuse an untagged create outright — which is what makes both
+  tag-scoping (I1) and teardown (I6) real there. On grants scoped by a name/ARN pattern, the
+  name is the fence and the tags are attribution, not enforcement.
 
-- **I4 — No admin, ever; no self-escalation.**
-  AgentsPoppy never asks for, requires, or can use Admin. The broker role is a wide-but-fenced
-  role; per-connection session policies only ever **narrow** it (intersection, never union). The
-  role's deny guardrail blocks IAM-user management, account/org control, CloudTrail tampering, and
-  **attaching the account-admin policies** (`AdministratorAccess`, `IAMFullAccess`, `PowerUserAccess`)
-  to any role or group — so no poppy, however broad its declared grant, can mint itself admin.
+- **I4 — No stored admin; no self-escalation.**
+  AgentsPoppy never stores admin and never keeps it: setup asks **once** for a credential able
+  to create a role and a user, uses it in memory, and persists only the operator key — the
+  setup key minus all IAM permissions. The broker role is a wide-but-fenced role;
+  per-connection session policies only ever **narrow** it (intersection, never union). The
+  role's deny guardrail blocks IAM-user management, account/org control, CloudTrail tampering,
+  and **attaching the account-admin policies** (`AdministratorAccess`, `IAMFullAccess`,
+  `PowerUserAccess`) — so a poppy cannot escalate beyond the grants the user approved, and the
+  role's guardrails hold even if a grant were written recklessly wide.
 
 - **I5 — Short-lived and revocable.**
   Vended creds live ~1h and auto-rotate. **Pause** / **revoke** stop the next mint; access dies
-  within the token TTL. There is no long-lived secret to claw back.
+  within the token TTL. Nothing an *app* receives is long-lived — the one long-lived secret is
+  the operator key on the user's own disk, which no poppy receives and which confinement
+  (SECURITY_MECHANISM.md §6.1) now denies poppies from reading.
 
 - **I6 — Tear down exactly the footprint.**
   Teardown deletes the connection's CloudFormation stack(s), sweeps its tagged resources, and
@@ -116,7 +123,8 @@ delete another app's pool. So its Cognito grant is **split**:
   `AdminCreateUser`, `AdminSetUserPassword`, `AdminDeleteUser`, `ListUsers` → `TAGGED_AS_SELF`.
 
 Result: MailPoppy can stand up a pool and fully run it, but a pool it didn't create has no
-`agentspoppy:connection` tag → every delete/modify/admin call against it is denied. (CloudFormation
+`agentspoppy:app` tag naming it → every delete/modify/admin call against it is denied
+(ownership is pinned to the app tag; the connection id is an audit tag). (CloudFormation
 propagates the stack's tags to the pool, so pools born via the poppy's stack are tagged
 automatically; `cognito-idp:TagResource` covers the direct-create path.)
 
@@ -176,7 +184,7 @@ credentials = brokerCredentials()  ??  fromIni({ profile: <poppy's own profile> 
 
 ### Pre-broker (legacy) resources
 
-A resource created **before** a connection existed has **no** `agentspoppy:connection` tag, so
+A resource created **before** a connection existed has **no** `agentspoppy:app` tag, so
 the **brokered** (tag-scoped) creds correctly refuse to manage it — by design, not a bug. Such a
 resource is reachable only via the poppy's **own direct profile**, or by **adopting** it
 (stamping it with the connection's tags) so it joins the footprint. *(Currently moot for MailPoppy

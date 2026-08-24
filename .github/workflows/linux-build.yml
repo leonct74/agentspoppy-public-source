@@ -15,6 +15,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write # draft-release upload below
     steps:
       - uses: actions/checkout@v4
 
@@ -36,6 +38,15 @@ jobs:
 
       - name: Install workspace dependencies
         run: npm ci
+
+      # The broker's unit suite on REAL Linux — including the update-swap and
+      # process-stop tests, so platform differences in rename/kill semantics
+      # (the class of the 2026-08-22 Windows EBUSY field bug) are exercised
+      # here rather than assumed from macOS runs. (windows-build can't run the
+      # suite yet: several fixtures spawn .sh scripts — Windows-compatible
+      # fixtures are a follow-up.)
+      - name: Broker unit tests
+        run: npm test -w @agentspoppy/broker
 
       - name: Build broker (linux-x64 Node SEA)
         run: npm run build:broker -w @agentspoppy/app
@@ -65,11 +76,21 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         run: npm run tauri -w @agentspoppy/app -- build --bundles appimage
 
-      - name: Upload AppImage artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: AgentsPoppy-linux-x64
-          path: |
-            app/src-tauri/target/release/bundle/appimage/*.AppImage
+      # A rolling DRAFT release in this (private) repo, not an Actions artifact: the
+      # 114 MB AppImage alone dominated the account-wide 500 MB artifact ceiling, and
+      # on 2026-08-22 it blocked both v0.3.4 release builds with ZERO live artifacts —
+      # deleted ones still count until GitHub's 6-12h usage recalculation. Release
+      # assets cost no Actions storage. Drafts are invisible outside the repo; this is
+      # pure transport, downloaded with an authenticated gh and published permanently
+      # to the public agentspoppy-releases repo as before.
+      - name: Upload AppImage to the ci-linux-build draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="ci-linux-build"
+          gh release delete "$TAG" --yes 2>/dev/null || true
+          gh release create "$TAG" --draft \
+            --title "CI transport: linux run ${{ github.run_id }}" \
+            --notes "linux-x64 AppImage build of ${{ github.sha }}. Pure transport, not a release." \
+            app/src-tauri/target/release/bundle/appimage/*.AppImage \
             app/src-tauri/target/release/bundle/appimage/*.sig
-          retention-days: 14

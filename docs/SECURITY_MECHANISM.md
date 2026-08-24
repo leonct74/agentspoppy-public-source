@@ -150,7 +150,7 @@ Two channels, and they close differently:
 | Channel | Status |
 |---|---|
 | **Environment** — `AWS_*` inherited from the process that launched AgentsPoppy | **Closed.** `poppyEnv()` in `extensions/backend-host.ts` strips the entire `AWS_*` namespace from every spawned backend's environment. The whole prefix rather than a list of known names, so a variable AWS invents later is covered by construction. Enforced by a real-spawn test. |
-| **Filesystem** — reading `~/.aws/credentials` directly | **Closable, opt-in today.** A backend declaring `backend.isolation: "strict"` runs under the runtime's permission model and is denied every path outside its own three (below). Default is still `"none"` for compatibility. |
+| **Filesystem** — reading `~/.aws/credentials` directly | **Closed for every listed poppy (2026-08-20).** A backend declaring `backend.isolation: "strict"` runs under the runtime's permission model and is denied every path outside its own three (below). Every first-party poppy with a backend now declares it (see below), and an unconfined backend is refused at listing review (RUNTIMES.md R7). **Since 0.3.5 the field itself defaults to `"strict"`**: omitting it confines the backend, and running unconfined requires writing `"isolation": "none"` deliberately. Three independent gates then refuse that: the manifest validator exits non-zero, the submissions API rejects the listing server-side (re-reading the manifest from the uploaded bytes), and the mechanical update review refuses a `strict`→`none` downgrade. The host additionally logs an explicit unconfined-start warning. The one sanctioned exception is a named, one-release data migration (docs/CONFINEMENT-MIGRATION.md). |
 
 **Why the environment one mattered.** Nothing had to go wrong for it to leak: a developer
 who exports `AWS_ACCESS_KEY_ID` in the shell they launch AgentsPoppy from was handing every
@@ -186,19 +186,38 @@ Two implementation notes that cost time to find:
   spellings.
 - **`dir` and `dir/*`.** A bare directory path matches only the directory entry itself.
 
-**Default is `"none"`, and that is a compatibility decision, not a recommendation.** Making
-it the default requires migrating the poppies that write outside these three places:
+**The migration is DONE (2026-08-20) — every listed first-party poppy with a backend is
+confined in production.** The three classes of work it took (the full record, per poppy and
+per release, is `docs/CONFINEMENT-MIGRATION.md`):
 
-1. **MailPoppy's backend reads and writes `~/.aws/credentials`**
-   (`node-sidecar/src/awsProfile.ts`) — a legacy of its standalone, pre-poppy credential
-   entry. Benign in intent, precisely the capability this removes, and proof the concern is
-   not hypothetical. Under the broker it resolves credentials via `brokerCredentials()`, so
-   the code path is dead weight there.
-2. **State outside the data directory** — MailPoppy keeps its provisioning ledger and buyer
-   id under `~/.mailpoppy/`. Those move to `bootstrap.dataDir`.
-3. **Saving files for the user.** A poppy must not write to `~/Downloads` itself. The host
-   already has the right affordance: serve the bytes from a one-shot `/local-download/<token>`
-   route and let the browser save them (`http.ts`, `/ext-dl/:id/local-download/:token`).
+1. **The local `~/.aws` credential plane retired.** MailPoppy's backend read and wrote
+   `~/.aws/credentials` (`awsProfile.ts`) — benign in intent, precisely the capability this
+   removes, and proof the concern was never hypothetical. In the container the route now
+   refuses plainly, two fromIni-only paths (the IMAP import, the capability probe) resolve
+   broker-first, and every existence probe survives the permission model's throwing
+   `existsSync`.
+2. **State moved into `bootstrap.dataDir`** — with one-time, idempotent, unconfined
+   *migration releases* first, because pre-confinement state in the user's home can only be
+   copied out by an unconfined run (MailPoppy's ledger — an input to teardown correctness —
+   and buyer id; VM-Poppy's SSH keys and configs; VPN-Poppy's device keys and the
+   teardown-sweep region pointer). Pattern: ship the migrator, gate on one run, flip the flag.
+3. **Every write to the user's folders replaced** by the one-shot `/local-download/<token>`
+   handoff (`http.ts`, `/ext-dl/:id/local-download/:token`) — the system browser does the
+   saving. Files come *in* through the frontend's OS picker (sandboxes gate downloads, not
+   pickers — the user hands the poppy one file; it never browses their disk).
+
+Fleet state at 2026-08-20: CrewPoppy 0.9.3, MailPoppy 0.1.17, VM-Poppy 0.1.12,
+TrafficPoppy 0.2.4, LiveOpsPoppy 0.3.2 — all `strict`, all listed with `minHost 0.3.1`
+(the first host that honours the flag; an older host would ignore it and run the poppy
+unconfined, so the listing refuses to install there). VPN-Poppy 0.1.8 is the last live
+migrator; its strict 0.1.9 is staged.
+
+**And the requirement is enforced, not aspirational (R7):** the mechanical update review
+hard-refuses a confinement *downgrade* and never auto-publishes an unconfined backend
+(human review is the sanctioned migration exception); the admin approve route verifies the
+package and refuses a first listing with an unconfined backend; and the user-facing audit
+prompts — updates *and* first installs — command the user's own AI agent to check the flag
+and treat its absence as grounds for DO NOT INSTALL.
 
 **What this is not.** It is a runtime barrier, not an OS one, and it covers `node22` backends
 only — a `runtime: "native"` backend is an arbitrary binary, which is why the manifest
@@ -208,20 +227,40 @@ stronger, needs a launcher per platform, and is not done.
 
 **The stronger answer is fewer backends.** A poppy's frontend already runs in a sandboxed
 iframe with no filesystem, no processes and no environment — for a frontend-only poppy this
-whole section is moot. A backend should be an exception a poppy justifies, not the default
-(`backend.runtime` currently defaults to `"native"` when omitted), and the fact that a poppy
-ships one is **not yet surfaced in the risk rating** — a user approving a connection sees a
-careful breakdown of AWS grants and no mention that native code is about to run on their
-machine. For this threat that line matters more than any single grant.
+whole section is moot. A backend should be an exception a poppy justifies, not the default.
+**The manifest defaults were flipped in 0.3.5**: `backend.runtime` now defaults to `"node22"`
+and `backend.isolation` to `"strict"`, so a poppy that never thinks about confinement gets the
+confined combination rather than the opaque one (it was `"native"` + unconfined while the
+pre-confinement fleet migrated — see `docs/CONFINEMENT-MIGRATION.md`). What remains is that the
+fact a poppy ships a backend at all is **still not surfaced in the risk rating** — a user
+approving a connection sees a careful breakdown of AWS grants and no mention that native
+code is about to run on their machine. For this threat that line matters more than any
+single grant.
 
 ## 7. Change history
 
+- **2026-08-20** — §6.1's filesystem channel CLOSED fleet-wide. Every listed first-party
+  poppy with a backend runs `isolation: "strict"` in production (per-poppy record:
+  `docs/CONFINEMENT-MIGRATION.md`); RUNTIMES.md R7 makes an unconfined backend a listing
+  refusal, enforced server-side in the mechanical update review and the admin approve
+  route (`agentspoppy-web`); the update AND new first-install audit prompts command the
+  user's AI agent to verify the flag (`app/src/lib/updateAudit.ts`); `UpdatePreview`
+  carries `installedIsolation` so a strict→none downgrade is visible to the agent.
+  hello-poppy and the developer docs (AGENTS.md, STARTER_PROMPT.md) now model strict as
+  the shape a poppy is built in.
 - **2026-08-10** — §6.1 added. `poppyEnv()` strips the whole `AWS_*` namespace (and any
   inherited `NODE_OPTIONS`) from every spawned backend's environment; before this, a poppy
   launched from a shell holding `AWS_ACCESS_KEY_ID` inherited the operator's long-lived key
   outright. `BackendBootstrap.dataDir` added, and `backend.isolation: "strict"` confines a
-  `node22` backend to {install dir, data dir, tmp} with child processes denied — opt-in,
-  intended to become the default. `extensions/backend-host.ts`.
+  `node22` backend to {install dir, data dir, tmp} with child processes denied — opt-in at
+  the time, while the existing fleet still kept state in the user's home. `extensions/backend-host.ts`.
+- **2026-08-24** — the confinement migration completed, so the defaults were flipped:
+  `backend.runtime` → `"node22"` and `backend.isolation` → `"strict"`. Omitting either now
+  yields the confined combination; unconfined is reachable only by declaring
+  `"isolation": "none"`, which the manifest validator (exit 1), the submissions API and the
+  mechanical update review each refuse, and which the host logs loudly if it ever starts.
+  Shared `effectiveRuntime`/`effectiveIsolation` helpers apply the defaults in ONE place so the
+  spec, the validator and the host cannot drift. `extension-sdk/src/manifest.ts`.
 - **2026-07-23** — I3 added (birth-tag-enforced creates, `aws:RequestTag` condition) and
   the create/mutate split introduced in `statementForGrant`, fixing the create-always-
   denied defect found live by TrafficPoppy (acm:RequestCertificate). Commit `6ed3108`.

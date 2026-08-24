@@ -511,9 +511,16 @@ outright (otherwise `cat ~/.aws/credentials` walks around the whole thing). Requ
 `runtime: "node22"` — a native executable has no runtime of ours inside it to enforce an allowlist,
 so the manifest validator rejects the combination rather than pretending.
 
-It is opt-in today only because poppies written before it exists would break. **Declare it.** It is
-intended to become the default and to be required for listing, and until a poppy declares it, the
-honest description of a backend is that it can read whatever the user can read.
+**Declaring it is a listing requirement (RUNTIMES.md R7, 2026-08-20)** — a backend without
+`"isolation": "strict"` is rejected at review, with one sanctioned exception: a named, one-release
+data migration whose confined successor is already identified (state created before confinement can
+only be moved out of the user's home by an unconfined run). Your listing must also pin
+`minHost: "0.3.1"` or newer — an older AgentsPoppy ignores the flag and would run you unconfined,
+which is worse than not claiming it. Until a poppy declares strict, the honest description of its
+backend is that it can read whatever the user can read — and that is what the user's audit prompt
+now tells their AI agent to flag. One trap to build for: under the permission model,
+`fs.existsSync` on a DENIED path THROWS instead of returning false — wrap existence probes in
+try/catch.
 
 **The broker authenticates callers.** Loopback is *not* a trust boundary — every poppy's backend is
 a local process too — so the broker checks a bearer token on every request. Two classes: a per-run

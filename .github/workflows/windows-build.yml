@@ -14,6 +14,8 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: write # draft-release upload below
     defaults:
       run:
         shell: bash
@@ -32,6 +34,13 @@ jobs:
 
       - name: Install workspace dependencies
         run: npm ci
+
+      # The broker's unit suite on REAL Windows. This is the OS whose file-locking rules
+      # produced the 2026-08-22 poppy-update bug (EBUSY), which CI could not have caught
+      # because the suite had never run here — the fixtures spawned .sh scripts and
+      # asserted POSIX execute bits. Both are now cross-platform.
+      - name: Broker unit tests
+        run: npm test -w @agentspoppy/broker
 
       - name: Build broker (win32-x64 Node SEA)
         run: npm run build:broker -w @agentspoppy/app
@@ -61,11 +70,21 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         run: npm run tauri -w @agentspoppy/app -- build --bundles nsis
 
-      - name: Upload installer artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: AgentsPoppy-windows-x64-unsigned
-          path: |
-            app/src-tauri/target/release/bundle/nsis/*.exe
+      # A rolling DRAFT release in this (private) repo, not an Actions artifact: the
+      # account-wide 500 MB artifact ceiling blocked both v0.3.4 release builds on
+      # 2026-08-22 — with ZERO live artifacts, because deleted ones still count until
+      # GitHub's 6-12h usage recalculation. Release assets cost no Actions storage.
+      # Drafts are invisible outside the repo; this is pure transport, downloaded with
+      # an authenticated gh and published through the real channels (MS Store / the
+      # public agentspoppy-releases repo).
+      - name: Upload installer to the ci-windows-build draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="ci-windows-build"
+          gh release delete "$TAG" --yes 2>/dev/null || true
+          gh release create "$TAG" --draft \
+            --title "CI transport: windows run ${{ github.run_id }}" \
+            --notes "Unsigned windows-x64 build of ${{ github.sha }}. Pure transport, not a release." \
+            app/src-tauri/target/release/bundle/nsis/*.exe \
             app/src-tauri/target/release/bundle/nsis/*.sig
-          retention-days: 14

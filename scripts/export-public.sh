@@ -93,6 +93,26 @@ git archive HEAD -- "${PUBLIC_PATHS[@]}" | tar -x -C "$STAGING"
 # It must never be published: it IS the list of things we're hiding.
 rm -f "$STAGING/$DENYLIST_FILE"
 
+# INTERNAL-ONLY documents. These NEVER go public (founder, 2026-08-24). An audit
+# enumerates our own weaknesses, several on the vendor side which is not public
+# and so cannot be read alongside them — publishing it hands a reader a map with
+# no territory. Removed here rather than added to FORBIDDEN because FORBIDDEN
+# aborts the whole export; these should be silently dropped, every time.
+#
+# The trap this closes: the whitelist gates new TOP-LEVEL paths, but a new file
+# inside an already-whitelisted directory (docs/) publishes itself on the next
+# sync with no decision from anyone. AUDIT-2026-08-16.md nearly did exactly that.
+INTERNAL_ONLY=(
+  "docs/AUDIT-2026-08-16.md"
+)
+for f in "${INTERNAL_ONLY[@]}"; do
+  rm -f "$STAGING/$f"
+done
+
+# Belt and braces: any docs/ file whose name marks it internal is dropped too, so
+# the next audit or postmortem cannot leak by being new rather than listed.
+find "$STAGING/docs" -maxdepth 1 -type f \( -name 'AUDIT-*' -o -name 'INTERNAL-*' -o -name 'POSTMORTEM-*' \) -delete 2>/dev/null || true
+
 # ---- Safety gates -----------------------------------------------------------
 fail() { echo "FATAL: $1 — aborting, nothing pushed." >&2; exit 1; }
 

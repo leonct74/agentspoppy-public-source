@@ -1,0 +1,203 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>AgentsPoppy — the architecture we are building to</title>
+<style>
+  @page { size: 1600px 1010px; margin: 0 }
+  html, body { margin: 0; padding: 0; background: #0E0D0C }
+  svg { display: block }
+  text { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; }
+  .zone      { font-size: 15px; font-weight: 700; letter-spacing: 2.4px; }
+  .boxtitle  { font-size: 19px; font-weight: 700; fill: #ECE9E2 }
+  .small     { font-size: 12.5px; fill: #A8A294 }
+  .tiny      { font-size: 11.5px; fill: #8F8A80 }
+  .mono      { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px; fill: #E08A6D }
+  .monosm    { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 11.5px; fill: #8F8A80 }
+  .step      { font-size: 13px; font-weight: 700; fill: #0E0D0C }
+  .flowlbl   { font-size: 11px; fill: #A8A294 }
+  .title     { font-size: 34px; font-weight: 700; fill: #ECE9E2 }
+  .sub       { font-size: 15px; fill: #A8A294 }
+</style>
+<svg viewBox="0 0 1600 1010" width="1600" height="1010" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#D97757"/>
+    </marker>
+    <marker id="am" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6E6960"/>
+    </marker>
+  </defs>
+
+  <rect width="1600" height="1010" fill="#0E0D0C"/>
+
+  <text class="title" x="46" y="56">AgentsPoppy — the architecture we are building to</text>
+  <text class="sub"   x="46" y="84">Where the AWS key lives, what a poppy runs in, and what it is handed.</text>
+
+  <!-- ════════ ZONE 1: vendor ════════ -->
+  <rect x="46" y="120" width="250" height="400" rx="10" fill="#141311" stroke="#2E2B27"/>
+  <text class="zone" x="66" y="150" fill="#8F8A80">AGENTSPOPPY</text>
+  <text class="tiny" x="66" y="170">our servers</text>
+
+  <rect x="66" y="186" width="210" height="70" rx="7" fill="#1F1D1A" stroke="#3D3B37"/>
+  <text class="boxtitle" x="82" y="210" style="font-size:16px">Catalogue</text>
+  <text class="small"    x="82" y="230">Packages, versions, the</text>
+  <text class="small"    x="82" y="246">sha256 pin</text>
+
+  <rect x="66" y="266" width="210" height="56" rx="7" fill="#1F1D1A" stroke="#3D3B37"/>
+  <text class="boxtitle" x="82" y="290" style="font-size:16px">Checkout</text>
+  <text class="small"    x="82" y="310">Products, entitlements</text>
+
+  <rect x="66" y="332" width="210" height="86" rx="7" fill="#22201C" stroke="#D97757"/>
+  <text x="82" y="356" style="font-size:12.5px;font-weight:700;fill:#D97757">The listing rule</text>
+  <text class="small" x="82" y="376">A poppy that ships a</text>
+  <text class="small" x="82" y="392">backend and is not</text>
+  <text class="small" x="82" y="408">confined is rejected.</text>
+
+  <rect x="66" y="428" width="210" height="72" rx="7" fill="#22201C" stroke="#E6C68A"/>
+  <text x="82" y="452" style="font-size:12.5px;font-weight:700;fill:#E6C68A">Never receives a key</text>
+  <text class="small" x="82" y="472">Sends a poppy id and a</text>
+  <text class="small" x="82" y="488">buyer id. Nothing else.</text>
+
+  <!-- ════════ ZONE 2: the machine ════════ -->
+  <rect x="330" y="120" width="700" height="838" rx="10" fill="#141311" stroke="#3D3B37"/>
+  <text class="zone" x="352" y="150" fill="#ECE9E2">THE USER'S MACHINE</text>
+
+  <rect x="352" y="172" width="656" height="76" rx="7" fill="#1F1D1A" stroke="#3D3B37"/>
+  <text class="boxtitle" x="372" y="200">AgentsPoppy desktop app</text>
+  <text class="small"    x="372" y="222">Shows the consent screen. Owns the poppy tabs. Approves, pauses, revokes.</text>
+  <text class="tiny"     x="372" y="240">Tauri webview — a different origin from the poppies it hosts</text>
+
+  <rect x="352" y="266" width="656" height="96" rx="7" fill="#1F1D1A" stroke="#D97757" stroke-width="1.5"/>
+  <text class="boxtitle" x="372" y="294">The broker</text>
+  <text class="small"    x="372" y="316">Compiles what a poppy asked for into an AWS session policy, then vends.</text>
+  <text class="mono"     x="372" y="338">binds 127.0.0.1 only</text>
+  <text class="tiny"     x="530" y="338">· nothing on the network can reach it</text>
+  <text class="tiny"     x="372" y="354">Every AWS client in the broker resolves through the [agentspoppy] profile below</text>
+
+  <rect x="352" y="380" width="656" height="94" rx="7" fill="#22201C" stroke="#E6C68A" stroke-width="1.5"/>
+  <text x="372" y="406" style="font-size:13px;font-weight:700;letter-spacing:1.6px;fill:#E6C68A">THE ONLY LONG-LIVED AWS KEY</text>
+  <text class="mono" x="372" y="430" style="font-size:14px">~/.aws/credentials  →  [agentspoppy]</text>
+  <text class="small" x="372" y="450">The AgentsPoppyOperator key, file mode 0600. It belongs to an identity in</text>
+  <text class="small" x="372" y="466">the user's OWN account. The key pasted at setup is never written here.</text>
+
+  <rect x="352" y="500" width="656" height="330" rx="9" fill="#171614" stroke="#3D3B37"/>
+
+  <rect x="372" y="546" width="300" height="150" rx="7" fill="#1F1D1A" stroke="#3D3B37"/>
+  <text class="boxtitle" x="390" y="572" style="font-size:16px">Its screen</text>
+  <text class="tiny"     x="390" y="590" fill="#E08A6D">a sandboxed browser frame</text>
+  <text class="small"    x="390" y="614">No filesystem. No processes.</text>
+  <text class="small"    x="390" y="632">No environment.</text>
+  <text class="small"    x="390" y="656">Reaches the host only through</text>
+  <text class="small"    x="390" y="672">a message bridge, and only for</text>
+  <text class="small"    x="390" y="688">powers it declared.</text>
+
+  <rect x="688" y="546" width="302" height="150" rx="7" fill="#1F1D1A" stroke="#3D3B37"/>
+  <text class="boxtitle" x="706" y="572" style="font-size:16px">Its backend</text>
+  <text class="tiny"     x="706" y="590" fill="#E08A6D">a separate Node 22 process</text>
+  <text class="small"    x="706" y="614">Not in a browser. Runs as you,</text>
+  <text class="small"    x="706" y="630">but locked to three folders.</text>
+  <text class="small"    x="706" y="654">Every AWS_* variable stripped</text>
+  <text class="small"    x="706" y="670">from its environment.</text>
+  <text class="small"    x="706" y="688">No child processes.</text>
+
+  <rect x="372" y="712" width="618" height="98" rx="7" fill="#22201C" stroke="#D97757" stroke-width="1.5"/>
+  <text x="390" y="736" style="font-size:12.5px;font-weight:700;letter-spacing:1.4px;fill:#D97757">THE ONLY THREE PLACES THE BACKEND MAY TOUCH</text>
+  <text class="monosm" x="390" y="758">~/.agentspoppy/extensions/&lt;id&gt;/</text>
+  <text class="tiny"   x="640" y="758">its own code — read only</text>
+  <text class="monosm" x="390" y="776">~/.agentspoppy/extension-data/&lt;id&gt;/</text>
+  <text class="tiny"   x="640" y="776">its own state — read and write</text>
+  <text class="monosm" x="390" y="794">the OS temp folder</text>
+  <text class="tiny"   x="640" y="794">read and write · everything else is denied</text>
+
+  <text class="tiny" x="352" y="852" fill="#E6C68A">Your credentials file, documents, keys and every other poppy's folder are denied.</text>
+  <text class="tiny" x="352" y="870">Honest limit: enforced by the JavaScript runtime, not by the operating system, and it does not restrict network access.</text>
+
+  <!-- ════════ ZONE 3: aws ════════ -->
+  <rect x="1064" y="120" width="490" height="838" rx="10" fill="#141311" stroke="#3D3B37"/>
+  <text class="zone" x="1086" y="150" fill="#ECE9E2">THE USER'S OWN AWS ACCOUNT</text>
+  <text class="tiny" x="1086" y="170">Created once, by a CloudFormation stack named AgentsPoppy</text>
+
+  <rect x="1086" y="192" width="446" height="104" rx="7" fill="#1F1D1A" stroke="#3D3B37"/>
+  <text class="boxtitle" x="1104" y="218" style="font-size:16px">AgentsPoppyOperator</text>
+  <text class="tiny"     x="1104" y="236">an IAM user</text>
+  <text class="small"    x="1104" y="260">The key on the user's disk belongs to this.</text>
+  <text class="small"    x="1104" y="278">Cannot create identities. Cannot mint keys.</text>
+
+  <rect x="1086" y="314" width="446" height="150" rx="7" fill="#1F1D1A" stroke="#3D3B37"/>
+  <text class="boxtitle" x="1104" y="340" style="font-size:16px">AgentsPoppyBroker</text>
+  <text class="tiny"     x="1104" y="358">a role · broad by necessity — it has to build things</text>
+  <text class="small"    x="1104" y="384">Four things it may never do, written as</text>
+  <text class="small"    x="1104" y="400">explicit denials, so they hold even if our</text>
+  <text class="small"    x="1104" y="416">code has a bug:</text>
+  <text class="tiny"     x="1104" y="438" fill="#E08A6D">manage IAM users or keys · grant itself admin</text>
+  <text class="tiny"     x="1104" y="454" fill="#E08A6D">touch account or organisation settings · tamper with CloudTrail</text>
+
+  <rect x="1086" y="482" width="446" height="128" rx="7" fill="#22201C" stroke="#D97757" stroke-width="1.5"/>
+  <text x="1104" y="508" style="font-size:13px;font-weight:700;letter-spacing:1.4px;fill:#D97757">WHAT THE POPPY IS HANDED</text>
+  <text class="small" x="1104" y="532">A temporary AWS credential from STS.</text>
+  <text class="small" x="1104" y="552">AWS itself narrows it to the permissions</text>
+  <text class="small" x="1104" y="568">shown on the consent screen.</text>
+  <text class="tiny"  x="1104" y="592" fill="#E6C68A">Expires within the hour · a session policy can only narrow, never widen</text>
+
+  <rect x="1086" y="628" width="446" height="112" rx="7" fill="#1F1D1A" stroke="#3D3B37"/>
+  <text class="boxtitle" x="1104" y="654" style="font-size:16px">What the poppy builds</text>
+  <text class="small"    x="1104" y="678">Every resource must carry the poppy's name</text>
+  <text class="small"    x="1104" y="694">as it is created, or AWS refuses to create it.</text>
+  <text class="tiny"     x="1104" y="716" fill="#A8A294">So "what did this make?" is answered from the user's own logs,</text>
+  <text class="tiny"     x="1104" y="730" fill="#A8A294">and teardown can find all of it.</text>
+
+  <!-- ════════ flows ════════ -->
+  <path d="M296,300 L344,300" stroke="#6E6960" stroke-width="1.6" fill="none" marker-end="url(#am)"/>
+  
+  <path d="M680,362 L680,376" stroke="#E6C68A" stroke-width="1.6" fill="none" marker-end="url(#a)"/>
+
+  <path d="M1008,420 C1040,420 1050,250 1082,250" stroke="#E6C68A" stroke-width="1.8" fill="none" marker-end="url(#a)"/>
+  <text class="flowlbl" x="1050" y="306" text-anchor="end">signs in as</text>
+
+  <path d="M1309,296 L1309,310" stroke="#D97757" stroke-width="1.8" fill="none" marker-end="url(#a)"/>
+  <text class="flowlbl" x="1320" y="307">assumes</text>
+
+  <path d="M1309,464 L1309,478" stroke="#D97757" stroke-width="1.8" fill="none" marker-end="url(#a)"/>
+
+  <path d="M1082,546 C1040,546 1030,620 994,620" stroke="#D97757" stroke-width="1.8" fill="none" marker-end="url(#a)"/>
+  <text class="flowlbl" x="1058" y="562" text-anchor="end">handed over</text>
+  <text class="flowlbl" x="1058" y="576" text-anchor="end">the loopback</text>
+
+  <path d="M994,672 C1030,672 1050,684 1082,684" stroke="#6E6960" stroke-width="1.6" fill="none" marker-end="url(#am)"/>
+
+  <path d="M522,500 L522,542" stroke="#6E6960" stroke-width="1.6" fill="none" marker-end="url(#am)" marker-start="url(#am)"/>
+  <text class="flowlbl" x="534" y="524">message bridge</text>
+
+  <path d="M840,474 L840,542" stroke="#6E6960" stroke-width="1.6" fill="none" marker-end="url(#am)"/>
+  <text class="flowlbl" x="852" y="494">launches it, confined</text>
+
+  <!-- ════════ the three moments ════════ -->
+  <rect x="46" y="540" width="250" height="120" rx="8" fill="#1F1D1A" stroke="#3D3B37"/>
+  <text class="zone" x="66" y="566" fill="#D97757" style="font-size:13px">BEFORE YOU INSTALL</text>
+  <text class="small" x="66" y="590">Copy a prompt, hand it to your</text>
+  <text class="small" x="66" y="606">own AI. It reads the open source</text>
+  <text class="small" x="66" y="622">and checks the poppy respects</text>
+  <text class="small" x="66" y="638">its confinement — on first</text>
+  <text class="small" x="66" y="654">install and on every update.</text>
+
+  <rect x="46" y="676" width="250" height="130" rx="8" fill="#1F1D1A" stroke="#3D3B37"/>
+  <text class="zone" x="66" y="702" fill="#D97757" style="font-size:13px">SETUP — ONCE</text>
+  <circle cx="76" cy="724" r="9" fill="#D97757"/><text class="step" x="76" y="728" text-anchor="middle">1</text>
+  <text class="small" x="92" y="728">You paste a key you made.</text>
+  <circle cx="76" cy="754" r="9" fill="#D97757"/><text class="step" x="76" y="758" text-anchor="middle">2</text>
+  <text class="small" x="92" y="758">It builds the operator, in</text>
+  <text class="small" x="92" y="774">memory, and is dropped.</text>
+  <circle cx="76" cy="790" r="9" fill="#D97757"/><text class="step" x="76" y="794" text-anchor="middle">3</text>
+  <text class="small" x="92" y="794">The operator's key is stored.</text>
+
+  <rect x="46" y="822" width="250" height="136" rx="8" fill="#1F1D1A" stroke="#3D3B37"/>
+  <text class="zone" x="66" y="848" fill="#D97757" style="font-size:13px">EVERY SESSION</text>
+  <circle cx="76" cy="870" r="9" fill="#D97757"/><text class="step" x="76" y="874" text-anchor="middle">1</text>
+  <text class="small" x="92" y="874">The poppy states what it needs.</text>
+  <text class="small" x="92" y="890">You approve or refuse.</text>
+  <circle cx="76" cy="906" r="9" fill="#D97757"/><text class="step" x="76" y="910" text-anchor="middle">2</text>
+  <text class="small" x="92" y="910">AWS cuts a credential to that</text>
+  <text class="small" x="92" y="926">shape. It expires within the hour.</text>
+  <text class="tiny"  x="66" y="948">We hold nothing in between, and cannot start a session.</text>
+
+  <text class="tiny" x="46" y="988">The target state. Backend confinement is being rolled out poppy by poppy — see docs/CONFINEMENT-MIGRATION.md for where each one stands today.</text>
+</svg>

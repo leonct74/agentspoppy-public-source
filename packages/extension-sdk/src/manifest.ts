@@ -31,10 +31,15 @@ export type BackendTransport = "http" | "stdio";
  *
  * - `"node22"` → `entry` is a plain CJS bundle (e.g. `backend/index.cjs`) the host runs
  *   on its OWN shared Node runtime — the poppy ships ~no runtime bytes at all.
- * - `"native"` (the default, and the pre-0.3.0 behavior) → `entry` is a small
- *   self-contained executable of the poppy's own code. Bundling a language runtime
- *   inside it (Node SEA, Python, Electron…) fails certification: runtimes are
- *   provided by the platform, never shipped by poppies.
+ * - `"native"` → `entry` is a small self-contained executable of the poppy's own code.
+ *   Bundling a language runtime inside it (Node SEA, Python, Electron…) fails
+ *   certification: runtimes are provided by the platform, never shipped by poppies.
+ *   A native backend CANNOT be confined (there is no runtime of ours inside it to
+ *   enforce an allowlist), so it must opt out of confinement explicitly — and an
+ *   unconfined backend cannot be listed in the catalogue at all (RUNTIMES.md R7).
+ *
+ * **Defaults to `"node22"`.** It was `"native"` before 0.3.5, when confinement was
+ * opt-in; omitting the field now gives you the confinable runtime, not the opaque one.
  */
 export type BackendRuntime = "node22" | "native";
 
@@ -49,7 +54,7 @@ export interface ExtensionBackend {
    * messages over the child's stdin/stdout. Defaults to "http".
    */
   transport?: BackendTransport;
-  /** The runtime this backend needs. Defaults to "native". */
+  /** The runtime this backend needs. Defaults to `"node22"` — see {@link BackendRuntime}. */
   runtime?: BackendRuntime;
   /**
    * How far the host confines this backend's access to the user's machine.
@@ -60,17 +65,54 @@ export interface ExtensionBackend {
    *   and the OS temp directory (read/write). Everything else on the machine —
    *   `~/.aws/credentials` above all — is denied by the runtime, and spawning child
    *   processes is denied outright. Requires `runtime: "node22"`.
-   * - `"none"` (the default today) → no confinement beyond the OS user's own
-   *   permissions, which is to say: it can read whatever you can read.
+   * - `"none"` → no confinement beyond the OS user's own permissions, which is to say:
+   *   it can read whatever you can read, `~/.aws/credentials` included.
    *
-   * The default is `"none"` only for compatibility with poppies written before this
-   * existed. It is intended to become the default, and to be required for listing.
+   * **`"strict"` IS THE DEFAULT (since 0.3.5). Omitting this field confines the
+   * backend.** Running unconfined requires writing `"none"` here deliberately — it can
+   * no longer happen by omission or oversight.
+   *
+   * Opting out is additionally blocked at two independent gates, so an unconfined
+   * backend cannot reach a user through the catalogue:
+   *  1. **Listing (server-side).** A new listing whose backend is not `"strict"` is
+   *     refused by the submissions API, which re-reads the manifest from the uploaded
+   *     bytes rather than trusting the form; and the mechanical update review refuses a
+   *     `strict` → `none` downgrade on an existing listing.
+   *  2. **The host.** The broker logs an explicit unconfined-start warning, and the
+   *     manifest validator fails a package that is not confined.
+   *
+   * The single sanctioned exception is a NAMED, one-release data migration (moving
+   * pre-confinement state out of the user's home can only run unconfined), with the
+   * confined successor named in the release notes — the VM-Poppy 0.1.11→0.1.12 and
+   * MailPoppy 0.1.16→0.1.17 pattern. See docs/CONFINEMENT-MIGRATION.md.
    */
   isolation?: BackendIsolation;
 }
 
 /** See {@link ExtensionBackend.isolation}. */
 export type BackendIsolation = "strict" | "none";
+
+/**
+ * The runtime a backend ACTUALLY runs on, applying the default.
+ *
+ * Use this rather than reading `backend.runtime` directly: the default changed in 0.3.5
+ * (`"native"` → `"node22"`), and every reader must agree on what an omitted field means.
+ */
+export function effectiveRuntime(backend: Pick<Partial<ExtensionBackend>, "runtime">): BackendRuntime {
+  return backend.runtime ?? "node22";
+}
+
+/**
+ * How the host will ACTUALLY confine a backend, applying the default.
+ *
+ * `"strict"` unless the manifest deliberately says `"none"`. Before 0.3.5 this defaulted
+ * the other way, so a poppy that simply never thought about confinement ran with the
+ * user's full file access — including the AWS credentials the whole mechanism exists to
+ * never hand over. Omission is now the safe answer; opting out has to be written down.
+ */
+export function effectiveIsolation(backend: Pick<Partial<ExtensionBackend>, "isolation">): BackendIsolation {
+  return backend.isolation ?? "strict";
+}
 
 /**
  * An optional cleanup hook for resources a poppy creates OUTSIDE its CloudFormation
@@ -173,8 +215,18 @@ export function validateManifest(value: unknown): ManifestValidationResult {
     // A native executable is opaque to us: there is no runtime of ours inside it to
     // enforce an allowlist. Claiming confinement we cannot deliver would be worse than
     // not offering it, so the combination is rejected rather than silently ignored.
-    if (b.isolation === "strict" && b.runtime !== "node22") {
-      errors.push('backend.isolation "strict" requires backend.runtime "node22" — a native executable cannot be confined by the host');
+    //
+    // Checked on the EFFECTIVE values, not the written ones: since 0.3.5 isolation
+    // defaults to "strict", so declaring `runtime: "native"` and saying nothing about
+    // isolation now asks for the impossible combination. That is deliberate — a native
+    // backend must state `"isolation": "none"` out loud, which is exactly the choice the
+    // listing gate refuses. It can no longer be arrived at by omission.
+    if (effectiveIsolation(b) === "strict" && effectiveRuntime(b) !== "node22") {
+      errors.push(
+        'backend.isolation "strict" requires backend.runtime "node22" — a native executable cannot be confined by the host. ' +
+          'Since 0.3.5 isolation defaults to "strict", so a native backend must declare "isolation": "none" explicitly ' +
+          "(and an unconfined backend cannot be listed — RUNTIMES.md R7).",
+      );
     }
   }
 

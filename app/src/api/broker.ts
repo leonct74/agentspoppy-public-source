@@ -91,6 +91,8 @@ export interface UpdatePreview {
    *  new version's declared scope (in the repo) against these. */
   installedGrants: string[];
   installedCapabilities: string[];
+  /** Confinement of the installed version's backend — "strict" | "none" | "no-backend". */
+  installedIsolation: "strict" | "none" | "no-backend";
 }
 
 /** The outcome of an applied update, including what its declared scope actually changed. */

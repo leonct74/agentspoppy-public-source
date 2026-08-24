@@ -59,7 +59,8 @@ Conclusion: **runtime provisioning is the platform's job. Poppies declare; they 
   (Redis, Postgres, ffmpeg…)**. Detected mechanically: the Node SEA fuse sentinel
   (`NODE_SEA_FUSE_` string), known runtime/service signatures, and size caps.
 - **R2 — Declare, don't ship.** A backend declares what it needs in the manifest:
-  `backend.runtime` (§4.1) and, later, `backend.dependencies` (§4.4). Absent → `"native"`
+  `backend.runtime` (§4.1) and, later, `backend.dependencies` (§4.4). Absent → `"node22"` (it was
+  `"native"` before 0.3.5, while the pre-confinement fleet migrated)
   (a small self-contained binary of the developer's *own* code, size-capped).
 - **R3 — Dependencies are provisioned by AgentsPoppy, from official sources.** Either
   *embedded* in the signed container (v1: `node22` = the broker's own runtime) or
@@ -81,6 +82,20 @@ Conclusion: **runtime provisioning is the platform's job. Poppies declare; they 
   `MAX_PACKAGE_BYTES` drops 1 GB → 256 MB.
 - **Hard-reject from day one.** No third-party poppies are live yet and both first-party
   poppies migrate in the same release — a grace period would protect nobody.
+- **R7 — Confined from the user's files (2026-08-20).** A listing with a backend MUST declare
+  `"isolation": "strict"` (requires `runtime: "node22"`): the host runs the backend under Node's
+  permission model — read its install root; write only its `bootstrap.dataDir` and the OS temp
+  dir; **no child processes, workers, or native addons** — so `~/.aws/credentials` and the rest
+  of the user's home are denied by the RUNTIME, not by convention. Enforced at the same gates as
+  R1: the founder review CLI and the mechanical update review refuse a strict manifest whose
+  listing `minHost` predates 0.3.1 (an older host silently ignores the flag and runs the poppy
+  UNCONFINED — the label would be a lie), and refuse/flag an unconfined backend outright. The one
+  sanctioned exception is a **named, one-release data migration** (moving pre-confinement state
+  out of the user's home can only run unconfined — the VM-Poppy 0.1.11→0.1.12 pattern), with the
+  confined successor identified in the release notes. Every first-party poppy with a backend is
+  strict as of 2026-08-20 (CrewPoppy 0.9.3, MailPoppy 0.1.17, VM-Poppy 0.1.12, TrafficPoppy
+  0.2.4, LiveOpsPoppy 0.3.2; VPN-Poppy 0.1.9 pending its migrator gate). Migration record:
+  `docs/CONFINEMENT-MIGRATION.md`.
 
 **Explicitly rejected alternative:** using the *user's system* Node. It may be absent, the
 wrong major, or unvetted; running poppy code on an arbitrary PATH interpreter is a support
@@ -94,7 +109,8 @@ and security nightmare. The container is the runtime provider, not the user's PA
 "backend": { "entry": "backend/index.cjs", "transport": "http", "runtime": "node22" }
 ```
 
-- New optional `runtime?: "node22" | "native"`, default `"native"` (today's behavior).
+- New optional `runtime?: "node22" | "native"`, default `"node22"` since 0.3.5 (it was
+  `"native"` when introduced, matching pre-0.3.0 behaviour).
 - Versioned names on purpose: a future `node24` is a *distinct declared value*, so the
   contract between poppy and container Node major is explicit.
 - `runtime: "node*"` ⇒ `entry` is a CJS bundle, not an executable.

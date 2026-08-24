@@ -16,7 +16,7 @@ hello-poppy/
 │   ├── app.js            # talks to the host over the capability-gated bridge
 │   └── icon.svg
 └── backend/
-    └── server.mjs        # a zero-dependency Node process the host spawns (transport: http)
+    └── server.cjs        # a zero-dependency CJS file the host runs on ITS node22 (confined)
 ```
 
 What it demonstrates, end to end:
@@ -36,17 +36,14 @@ import `createHostBridgeClient` from `@agentspoppy/extension-sdk` instead — sa
 From the AgentsPoppy repo root:
 
 ```bash
-# 1. The backend must be executable (the install step also chmod +x's its copy).
-chmod +x examples/hello-poppy/backend/server.mjs
-
-# 2. Install into your AgentsPoppy home (~/.agentspoppy/extensions/com.example.hello-poppy/).
+# 1. Install into your AgentsPoppy home (~/.agentspoppy/extensions/com.example.hello-poppy/).
 #    This scaffold's source IS its built output, so point --frontend/--backend at the sources:
 node scripts/install-dev-extension.mjs \
   --src      examples/hello-poppy \
   --frontend examples/hello-poppy/frontend \
-  --backend  examples/hello-poppy/backend/server.mjs
+  --backend  examples/hello-poppy/backend/server.cjs
 
-# 3. Relaunch AgentsPoppy — the broker discovers extensions from disk at startup.
+# 2. Relaunch AgentsPoppy — the broker discovers extensions from disk at startup.
 npm run -w @agentspoppy/app tauri:dev
 ```
 
@@ -58,7 +55,7 @@ You can also run the backend on its own to see the bootstrap contract:
 
 ```bash
 AGENTSPOPPY_BOOTSTRAP='{"connectionId":"demo","credentialsUrl":"http://127.0.0.1:0/creds","credentialsToken":"demo-token","port":8123,"account":{"accountId":"123456789012","region":"eu-west-1"}}' \
-  node examples/hello-poppy/backend/server.mjs
+  node examples/hello-poppy/backend/server.cjs
 # → curl -s http://127.0.0.1:8123/info
 ```
 

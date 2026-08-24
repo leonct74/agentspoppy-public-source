@@ -4,7 +4,7 @@
 import { describe, it, expect } from "vitest";
 import { TAGGED_AS_SELF } from "@agentspoppy/core";
 import type { ExtensionManifest } from "./manifest";
-import { parseManifest, validateManifest } from "./manifest";
+import { parseManifest, validateManifest, effectiveRuntime, effectiveIsolation } from "./manifest";
 
 /** A realistic, valid manifest (MailPoppy-shaped) reused across cases. */
 function validManifest(): ExtensionManifest {
@@ -82,8 +82,16 @@ describe("validateManifest", () => {
   it("validates backend.runtime (docs/RUNTIMES.md — declare, don't ship)", () => {
     const node = validateManifest({ ...validManifest(), backend: { entry: "backend/index.cjs", runtime: "node22" } });
     expect(node.ok).toBe(true);
-    const native = validateManifest({ ...validManifest(), backend: { entry: "bin/x", runtime: "native" } });
-    expect(native.ok).toBe(true);
+    // Since 0.3.5 a native backend must ALSO opt out of confinement explicitly: isolation
+    // defaults to "strict", which native cannot satisfy. Saying nothing is no longer a way
+    // to end up unconfined — see the "confinement defaults" block below.
+    const silentNative = validateManifest({ ...validManifest(), backend: { entry: "bin/x", runtime: "native" } });
+    expect(silentNative.ok).toBe(false);
+    const declaredNative = validateManifest({
+      ...validManifest(),
+      backend: { entry: "bin/x", runtime: "native", isolation: "none" },
+    });
+    expect(declaredNative.ok).toBe(true);
     const bad = validateManifest({ ...validManifest(), backend: { entry: "bin/x", runtime: "python312" } as never });
     expect(bad.errors.some((e) => e.includes("backend.runtime"))).toBe(true);
   });
@@ -125,5 +133,42 @@ describe("parseManifest", () => {
   it("throws listing every validation problem", () => {
     const bad = JSON.stringify({ ...validManifest(), id: "x", version: "nope" });
     expect(() => parseManifest(bad)).toThrow(/invalid extension\.json/);
+  });
+});
+
+// 0.3.5 flipped the defaults. Before it, a poppy that simply never mentioned confinement
+// ran with the user's full file access — the unsafe answer by OMISSION, which is exactly
+// what an external audit reported in Aug 2026. Omission must now be the safe answer.
+describe("confinement defaults (0.3.5)", () => {
+  it("omitting both fields yields the CONFINED combination", () => {
+    expect(effectiveRuntime({})).toBe("node22");
+    expect(effectiveIsolation({})).toBe("strict");
+  });
+
+  it("an explicit value always wins over the default", () => {
+    expect(effectiveRuntime({ runtime: "native" })).toBe("native");
+    expect(effectiveIsolation({ isolation: "none" })).toBe("none");
+    expect(effectiveIsolation({ isolation: "strict" })).toBe("strict");
+  });
+
+  it("a manifest that says nothing about the backend beyond its entry is VALID and confined", () => {
+    const backend = { entry: "backend/index.cjs" };
+    expect(validateManifest({ ...validManifest(), backend }).ok).toBe(true);
+    expect(effectiveIsolation(backend)).toBe("strict");
+    expect(effectiveRuntime(backend)).toBe("node22");
+  });
+
+  // The one way to be unconfined is now to write it down — and writing it down is exactly
+  // what the listing gate refuses. It can no longer be reached by saying nothing.
+  it("a native backend must opt out of confinement EXPLICITLY, or it fails validation", () => {
+    const silent = validateManifest({ ...validManifest(), backend: { entry: "backend/bin", runtime: "native" } });
+    expect(silent.ok).toBe(false);
+    expect(silent.errors.join(" ")).toMatch(/must declare "isolation": "none" explicitly/);
+
+    const declared = validateManifest({
+      ...validManifest(),
+      backend: { entry: "backend/bin", runtime: "native", isolation: "none" },
+    });
+    expect(declared.ok).toBe(true);
   });
 });

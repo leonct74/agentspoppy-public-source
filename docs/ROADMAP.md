@@ -119,6 +119,98 @@ still to build.
      **UptimePoppy** — uptime checks from your own AWS (scheduled Lambda pings → alerts;
      smallest scope, fast win).
 
+11. **MCP server — expose installed poppies as tools to any AI client (parked; assessed 2026-08-14).**
+   Not scheduled; recorded so the reasoning isn't re-derived. The desktop app would speak **MCP**, so
+   an AI client (Claude Desktop, Cursor, …) can *operate* the user's poppies — "spin a throwaway VM",
+   "publish config v3 to prod", "how many visitors yesterday" — with every call routed through the
+   machinery that already exists: manifest scope → risk rating → user consent → short-lived scoped
+   STS credentials → attribution.
+   - **Why it's worth doing:** the differentiated claim, which almost no MCP server can make —
+     *every other cloud MCP server asks you to paste long-lived keys into a config file; this one
+     never hands your AI a credential at all.* Exposure comes from that claim travelling, **not**
+     from a directory listing (there are thousands of servers; presence ≠ traffic). Secondary
+     benefit: poppy authors get an AI-agent surface for free, just by declaring tools.
+   - **It is a SURFACE, not an alternative install path.** The broker hosts the poppies, so the app
+     is still required. Going standalone is technically possible (`npm run broker` already serves
+     headless on 127.0.0.1:8799 against real AWS) but consent would have to become terminal prompts,
+     and the visual approve-this-scope ceremony *is* the product. Keep consent in the app.
+   - **The hard part, and the only genuinely risky piece:** `auth.ts` has exactly two token classes
+     (HOST = desktop UI, BACKEND = one poppy's own credential mint) and its header is explicit that
+     loopback is *not* a trust boundary, because every poppy backend is a local process too. An MCP
+     client is a **third caller class** — neither host nor poppy — so it needs its own token, scoped
+     to tool invocation and structurally unable to reach the management plane (revoke / pause /
+     teardown / credential mint). Get that wrong and it opens the exact hole the broker exists to
+     close. Everything else is small: a stdio adapter proxying to the existing local HTTP server, a
+     `tools` block in the manifest, and a proxy hop to the backend port the registry already tracks.
+   - **Manifest rule if built:** each tool must declare its mutability **explicitly** — never infer
+     it from the action name (the risk assessor's substring trap already proves that inference
+     fails). Read-only tools flow under the granted scope; mutating tools need per-call consent or a
+     bounded session, because an MCP client sits outside our confinement and is prompt-injectable.
+   - **Effort:** ~1 day for a spike (one poppy, read-only tools, no consent queue) that produces the
+     demo video; ~1 week for a shippable version, plus a release cycle. **Do the spike first** — it
+     tests the only assumption that matters (does anyone connect a client?) before real time is spent.
+   - **Risk:** MCP's transport and auth spec have been revised repeatedly; keep the adapter thin and
+     never let MCP types leak into the broker core.
+
+12. **OpenClaw on a VM — a VM-Poppy recipe, not a new poppy (parked; assessed 2026-08-14).**
+   [OpenClaw](https://docs.openclaw.ai) (formerly Clawdbot/Moltbot, **MIT-licensed**, so packaging is
+   legally clean) is a self-hosted agent harness with shell access, browser automation, persistent
+   memory and 20+ messaging integrations (WhatsApp/Telegram/Slack/…). It fills a real capability gap
+   CrewPoppy doesn't cover — but the shape of the offer is not what it first appears.
+   - **🪤 It does NOT save tokens, and this is the single most important thing recorded here.**
+     OpenClaw is a harness, not a model. The only route that ever avoided metered tokens was routing
+     a Claude Pro/Max subscription through it, and **Anthropic banned third-party harnesses from
+     subscription credentials in January 2026, enforced at the API layer** — there is no supported
+     workaround and attempts risk the user's account. **Never ship anything that helps a user route
+     subscription credentials into OpenClaw**: it facilitates a ToS breach, and for a platform whose
+     brand is safe delegation that is a disproportionate risk to save someone $20/month.
+   - **Open-source models are a first-class path, but rented GPUs invert the economics.** Consensus
+     is 14B minimum and 32B+ for reliable tool calling (Qwen3 / Qwen2.5 / GPT-OSS rank best for
+     OpenClaw's tool-call format); below 14B agentic use falls apart. Approximate us-east-1, 24/7:
+     | Tier | VRAM | Instance | On-demand | Spot (~65% off) |
+     |---|---|---|---|---|
+     | Qwen2.5 14B | 16 GB | g4dn.xlarge | ~$384/mo | ~$135/mo |
+     | Qwen3/GPT-OSS 32B | 24 GB | g5.xlarge | ~$734/mo | ~$260/mo |
+     | Bring-your-own API key | — | t4g.small/medium | ~$15–30/mo | — |
+     Metered Claude API for a personal always-on agent is realistically **$20–80/mo**. The rule:
+     **local models are cheap on hardware you OWN and expensive on hardware you RENT** — GPU rental
+     only pays at high utilisation, and an agent that idles most of the day is the worst possible
+     fit. Spot halves it but interruptions break the always-on promise that is OpenClaw's whole point.
+   - **So the pitch is PRIVACY, never price:** *nothing leaves your account, not even the inference.*
+     That is on-thesis and unmatchable by Hostinger-style hosts (their box isn't the customer's
+     infrastructure). The buyer is anyone handling confidential/regulated/client data for whom "never
+     sent to a third-party API" is a requirement — for them $384/mo is unremarkable. Natural tiering:
+     free recipe = BYO API key on a small instance; premium = the GPU profile + zero-egress guarantee.
+   - **Competitive honesty:** hosts like Hostinger already sell pre-installed OpenClaw VPSes (~$5–15/mo
+     flat, managed) — real demand validation, and also a competitor we lose to on price and simplicity.
+     Unlike other poppies the software is cloud-agnostic, so ownership is the *only* differentiator.
+   - **Security — the non-negotiable rule.** OpenClaw is prompt-injectable by design and has hands:
+     shell + browser. It shipped **CVE-2026-25253** (cross-site WebSocket hijacking → RCE via a single
+     malicious link) and Cisco found **26% of community skills carried at least one vulnerability**.
+     Therefore: the instance gets **ZERO AWS credentials** — no instance role, no broker access. It is
+     a *tenant in* the cloud, never an *agent of* it. No inbound ports by default, pinned versions, no
+     preinstalled community skills. Shipping a preconfigured install means inheriting patch duty.
+   - **Shape:** a VM-Poppy recipe (preset image/user-data), reusing its EC2/no-IAM DNA — days, not
+     weeks. The one genuine departure from VM-Poppy: this box is **persistent, not ephemeral**, and
+     holds an API key, so secret handling and a "this is not throwaway, here is the monthly cost"
+     disclosure are new surface. The "show the money" rule is load-bearing.
+   - **🪤 Build gotcha:** point the gateway at Ollama's **native `/api/chat`**. If the baseUrl ends in
+     `/v1`, tool calls **fail silently** — the agent looks alive and simply never acts. Hard-code it
+     in the template; do not leave it to a doc.
+
+**Post-AffiliatePoppy-release sweep — every paywall speaks the code-first checkout (founder,
+2026-08-20).** AffiliatePoppy's D18 made `/api/checkout` return the `/buy` confirmation page,
+where a buyer enters an affiliate code BEFORE the session exists — the only moment a discount
+can be pre-applied and the commission folded into the application fee. Anything routed through
+`/api/checkout` inherited this for free: the catalogue's Buy, the `commerce:purchase` bridge
+(TrafficPoppy's tiers, AffiliatePoppy Pro), and MailPoppy (already on the central checkout).
+After AffiliatePoppy ships to production, run the sweep: (a) verify each paid poppy's purchase
+path actually passes through `/api/checkout` — no bespoke Stripe sessions anywhere; (b) any
+found are migrated to the commerce plane, never patched locally; (c) the rule for every FUTURE
+paid poppy: purchases go through the central checkout, which is what makes them affiliate-able
+on day one. (CrewPoppy mobile is out of scope by nature — App Store billing carries no Stripe
+codes.)
+
 ## Pre-public checklist (runs before steps 3 and 5)
 
 Making a repo public is one-way. Before flipping either MailPoppy or AgentsPoppy:

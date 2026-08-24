@@ -112,6 +112,9 @@ export interface UpdatePreview {
   installedGrants: string[];
   /** The host-bridge powers (host:openExternal, aws:credentials, …) the installed version has. */
   installedCapabilities: string[];
+  /** Whether the CURRENTLY-installed version's backend is confined ("strict"), unconfined
+   *  ("none"), or has no backend at all — so the audit can flag a confinement DOWNGRADE. */
+  installedIsolation: "strict" | "none" | "no-backend";
 }
 
 /** The outcome of an applied update, including what its declared scope actually changed —
@@ -473,6 +476,7 @@ export class DirectoryService {
       sha256: (entry.packages?.[this.platformKey] ?? entry.packages?.["any"])?.sha256 ?? "",
       installedGrants: formatGrants(prev.manifest),
       installedCapabilities: [...(prev.manifest.capabilities ?? [])],
+      installedIsolation: prev.manifest.backend ? (prev.manifest.backend.isolation === "strict" ? "strict" : "none") : "no-backend",
     };
   }
 
@@ -574,21 +578,21 @@ export class DirectoryService {
     await this.registry.remove(id);
     let movedAside = false;
     try {
-      await rename(dest, backup);
+      await renameWithRetry(dest, backup);
       movedAside = true;
-      await rename(staging, dest);
+      await renameWithRetry(staging, dest);
     } catch (err) {
-      await rm(staging, { recursive: true, force: true }).catch(() => {});
+      await rm(staging, { recursive: true, force: true, maxRetries: 10 }).catch(() => {});
       // Roll back — but re-register the previous install pointing at whichever path actually
       // holds its files now, so the registry never claims it's at `dest` when `dest` is empty.
       // If the restore rename fails (transient EPERM/EBUSY), the files are still in `backup`,
       // so register there rather than orphaning them under a dot-dir the disk scan skips.
       let restored = false;
-      if (movedAside) restored = await rename(backup, dest).then(() => true).catch(() => false);
+      if (movedAside) restored = await renameWithRetry(backup, dest).then(() => true).catch(() => false);
       this.registry.install(restored || !movedAside ? prev : { manifest: prev.manifest, root: backup });
       throw err;
     }
-    await rm(backup, { recursive: true, force: true }).catch(() => {});
+    await rm(backup, { recursive: true, force: true, maxRetries: 10 }).catch(() => {});
     this.registry.install({ manifest, root: dest });
     return { ok: true, extensionId: manifest.id, version: manifest.version };
   }
@@ -690,7 +694,7 @@ export class DirectoryService {
     const root = resolve(inst.root);
     const home = resolve(this.extensionsRoot);
     if (root !== home && root.startsWith(home + sep)) {
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 10 });
     }
     return { ok: true, extensionId: id };
   }
@@ -804,6 +808,41 @@ function capabilityDiff(
     capabilitiesAdded: [...after].filter((c) => !before.has(c)),
     capabilitiesRemoved: [...before].filter((c) => !after.has(c)),
   };
+}
+
+/** Attempts (~18s of waiting at the default cadence) before a stuck rename gives up. */
+const MAX_RENAME_ATTEMPTS = 20;
+/** Ceiling for the growing backoff between rename attempts. */
+const RENAME_RETRY_CAP_MS = 1000;
+
+/**
+ * `rename` that absorbs Windows sharing violations. A directory can't move while any
+ * process holds a handle inside it — the just-stopped backend can take a moment to fully
+ * release its files (its cwd IS the install dir), and antivirus scanners briefly pin
+ * freshly-downloaded ones — and both surface as EBUSY/EPERM. Short growing pauses
+ * outlast them; anything persistent still throws. (Field bug 2026-08-22: updating a
+ * poppy on Windows failed EBUSY at the swap.) `renameFn`/`baseDelayMs` injectable for tests.
+ */
+export async function renameWithRetry(
+  from: string,
+  to: string,
+  renameFn: (from: string, to: string) => Promise<void> = rename,
+  baseDelayMs = 100,
+): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await renameFn(from, to);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if ((code !== "EBUSY" && code !== "EPERM") || attempt >= MAX_RENAME_ATTEMPTS - 1) throw err;
+      // Back off fast at first, then settle at a steady poll: the common case clears in
+      // milliseconds, but an antivirus scan of a freshly-extracted ~19 MB poppy can hold
+      // the files for many seconds. A 2026-08-23 field report on the FIXED build still saw
+      // the update "fail, then pick it up after a bit" — recoverable, but only after the
+      // user had already been shown a failure, so the window is deliberately generous.
+      await new Promise((r) => setTimeout(r, Math.min(baseDelayMs * 2 ** attempt, RENAME_RETRY_CAP_MS)));
+    }
+  }
 }
 
 /**

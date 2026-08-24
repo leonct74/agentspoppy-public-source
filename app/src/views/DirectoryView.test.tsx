@@ -40,6 +40,7 @@ const preview = (over: Partial<import("../api/broker").UpdatePreview> = {}) => (
   sha256: "abc123",
   installedGrants: ["ses — * (SendEmail)"] as string[],
   installedCapabilities: ["aws:credentials"] as string[],
+  installedIsolation: "strict" as const,
   ...over,
 });
 
@@ -191,6 +192,20 @@ describe("DirectoryView", () => {
     // The action is Update, not a passive "Installed" badge.
     expect(screen.queryByText("Installed")).toBeNull();
     expect(screen.getByRole("button", { name: /Update to v1\.2\.3/ })).toBeTruthy();
+  });
+
+  it("a NOT-installed poppy offers Verify-with-your-AI-agent, and copying it puts the install audit on the clipboard", async () => {
+    vi.mocked(broker.directoryCatalog).mockResolvedValue(catalog(entry({ installed: false })));
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    render(<DirectoryView onInstalled={() => {}} onOpenPoppy={() => {}} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Verify this poppy with your AI agent/ }));
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    const prompt = writeText.mock.calls[0][0] as string;
+    expect(prompt).toContain("FIRST time");
+    expect(prompt).toContain("CHECK FILESYSTEM CONFINEMENT");
+    expect(await screen.findByText(/Prompt copied/)).toBeTruthy();
   });
 
   it("Update opens an AUDIT review that does NOT download — source diff + verify-with-agent", async () => {

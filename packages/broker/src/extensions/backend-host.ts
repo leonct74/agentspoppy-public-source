@@ -19,7 +19,7 @@
 import { realpathSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { BackendBootstrap, ExtensionManifest } from "@agentspoppy/extension-sdk";
+import { effectiveIsolation, effectiveRuntime, type BackendBootstrap, type ExtensionManifest } from "@agentspoppy/extension-sdk";
 
 /** Everything the host needs to launch one backend. */
 export interface BackendStartSpec {
@@ -75,6 +75,36 @@ const liveChildren = new Set<import("node:child_process").ChildProcess>();
 export function killAllBackends(): void {
   for (const child of liveChildren) child.kill();
   liveChildren.clear();
+}
+
+/**
+ * Stop a child and resolve only once it has ACTUALLY exited. Callers are usually about
+ * to move or delete the directory the child runs from (the update swap, uninstall), and
+ * on Windows that rename/rm fails EBUSY while the dying process still holds handles
+ * inside it — its cwd IS the install dir (field bug 2026-08-22: updating a poppy on
+ * Windows failed EBUSY because stop() returned before the process was gone). Polite
+ * signal first; SIGKILL if it lingers past the grace. Always resolves — an unkillable
+ * zombie must not hang the host, and the rename retry absorbs the residue.
+ */
+export async function stopChild(child: import("node:child_process").ChildProcess, graceMs = 3000): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  child.kill();
+  if (await waitForExit(child, graceMs)) return;
+  child.kill("SIGKILL");
+  await waitForExit(child, graceMs);
+}
+
+/** Resolve true when the child has exited, false if `timeoutMs` passes first. */
+function waitForExit(child: import("node:child_process").ChildProcess, timeoutMs: number): Promise<boolean> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), timeoutMs);
+    timer.unref?.();
+    child.once("exit", () => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
 }
 
 /** Tunables for {@link NodeBackendHost}'s readiness wait (overridable in tests). */
@@ -147,7 +177,11 @@ export function confinementOptions(
   tmp: string,
 ): string | null {
   const backend = spec.manifest.backend;
-  if (backend?.isolation !== "strict") return null;
+  // Confine unless the manifest DELIBERATELY opts out. Before 0.3.5 this read
+  // `!== "strict"`, so a poppy that simply never mentioned isolation ran with the user's
+  // full file access — the unsafe answer by omission. effectiveIsolation() applies the
+  // default in one shared place so the spec, the validator and the host cannot disagree.
+  if (!backend || effectiveIsolation(backend) === "none") return null;
   const dataDir = spec.bootstrap.dataDir;
   if (!dataDir) throw new Error(`extension ${spec.manifest.id} asked for strict isolation but was given no dataDir`);
   const read = [spec.root, dataDir, tmp];
@@ -242,7 +276,7 @@ export class NodeBackendHost implements BackendHost {
       ? spec.manifest.backend.entry
       : join(spec.root, spec.manifest.backend.entry);
 
-    const runtime = spec.manifest.backend.runtime ?? "native";
+    const runtime = effectiveRuntime(spec.manifest.backend);
     let executable: string;
     let args: string[];
     if (runtime !== "native") {
@@ -285,6 +319,18 @@ export class NodeBackendHost implements BackendHost {
         // Missing paths are reported by the spawn itself, with a better message.
       }
     }
+    // An unconfined backend is now a deliberate, declared choice (see effectiveIsolation)
+    // and cannot be listed in the catalogue. If one still starts — a sideload, a dev build,
+    // or the sanctioned one-release migration — say so where an operator will see it,
+    // rather than letting the safest-sounding configuration be the silent one.
+    if (effectiveIsolation(spec.manifest.backend) === "none") {
+      console.warn(
+        `⚠ ${spec.manifest.id}: backend starting UNCONFINED (manifest declares "isolation": "none") — ` +
+          `it runs with your full file access, including ~/.aws/credentials. An unconfined backend ` +
+          `cannot be listed in the catalogue (RUNTIMES.md R7).`,
+      );
+    }
+
     const child = spawn(executable, args, {
       cwd,
       env: {
@@ -308,7 +354,9 @@ export class NodeBackendHost implements BackendHost {
         return running;
       },
       async stop() {
-        if (running) child.kill();
+        // Wait for the real exit — the caller may be about to move/delete the install
+        // dir, which EBUSYs on Windows while the dying child still holds it (stopChild).
+        if (running) await stopChild(child);
         running = false;
       },
     };

@@ -6,7 +6,7 @@ import { ApiError, broker, type DirectoryCatalogView, type DirectoryPoppy, type 
 import { Icon } from "../components/Icon";
 import { ExtLink, openExternal } from "../components/ExtLink";
 import { PoppySpinner } from "../components/PoppySpinner";
-import { buildAuditPrompt, hasSourceDiff, repoCompareUrl } from "../lib/updateAudit";
+import { buildAuditPrompt, buildInstallAuditPrompt, hasSourceDiff, repoCompareUrl } from "../lib/updateAudit";
 import { buyerId, commerceBase, setCommerceBase, formatPrice, checkEntitlement, startCheckout } from "../lib/commerce";
 
 export interface DirectoryViewProps {
@@ -55,6 +55,8 @@ export function DirectoryView({ onInstalled, onOpenPoppy, onUninstalled, onUpdat
   const [preview, setPreview] = useState<UpdatePreview | null>(null);
   const [reviewLoading, setReviewLoading] = useState(false);
   const [copiedPrompt, setCopiedPrompt] = useState(false);
+  // First-install verify: which poppy's audit prompt was just copied (id), for feedback.
+  const [copiedInstallPrompt, setCopiedInstallPrompt] = useState<string | null>(null);
   // A post-install notice (e.g. "this version asks for new access") — shown as a success banner.
   const [updateNotice, setUpdateNotice] = useState<string | null>(null);
 
@@ -270,6 +272,18 @@ export function DirectoryView({ onInstalled, onOpenPoppy, onUninstalled, onUpdat
     }
   };
 
+  const copyInstallAuditPrompt = async (p: DirectoryPoppy) => {
+    try {
+      await navigator.clipboard.writeText(buildInstallAuditPrompt(p));
+      setCopiedInstallPrompt(p.id);
+      setTimeout(() => setCopiedInstallPrompt((cur) => (cur === p.id ? null : cur)), 2500);
+    } catch {
+      setInstallError(
+        "Couldn't copy the audit prompt to your clipboard. You can still read the poppy's source via its repository link.",
+      );
+    }
+  };
+
   const uninstall = async (id: string) => {
     setUninstalling(id);
     setInstallError(null);
@@ -396,6 +410,18 @@ export function DirectoryView({ onInstalled, onOpenPoppy, onUninstalled, onUpdat
                     >
                       <Icon name="external" /> Read the source
                     </ExtLink>
+                    {!p.installed && (
+                      <button
+                        className="btn btn-audit directory-source-verify"
+                        title="Copies a prompt for your own AI agent: read the open source at this release, list every external endpoint, check the AWS grants — and confirm the backend is confined from your files"
+                        onClick={() => void copyInstallAuditPrompt(p)}
+                      >
+                        <Icon name={copiedInstallPrompt === p.id ? "check" : "shield"} />
+                        {copiedInstallPrompt === p.id
+                          ? "Prompt copied — paste it to your AI agent"
+                          : "Verify this poppy with your AI agent"}
+                      </button>
+                    )}
                   </div>
 
                   <div className="os-card-actions">

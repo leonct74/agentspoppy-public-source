@@ -3,14 +3,22 @@
 AgentsPoppy is an **agnostic, local-first permission broker for your own AWS**. This document
 describes the v1 architecture. It contains no app-specific logic by design.
 
+> **Status (2026-08-20).** Corrected against the line-by-line code audit of 16 Aug
+> (`docs/AUDIT-2026-08-16.md`) and updated for backend confinement. Where this overview and
+> [`SECURITY_MECHANISM.md`](./SECURITY_MECHANISM.md) differ in detail, the latter is
+> authoritative — it is the mechanism-level document and is kept current first.
+
 > For the **contract between a poppy and the broker** — the invariants, the per-service scoping
 > matrix, connected-vs-disconnected credentials, the risk tiers, and decisions of record — see
 > [`INTEGRATION.md`](./INTEGRATION.md).
 
 ## Principles
 
-- **Local-first credentials.** AWS credentials live on the user's machine and never leave it.
-  There is no server-side key custody. Any hosted site is marketing only.
+- **Local-first credentials.** AgentsPoppy never sends AWS keys anywhere and holds no keys
+  server-side: the operator credential lives on the user's machine (in `~/.aws/credentials`
+  at 0600 — the same place the AWS CLI puts one). The app does call our web services for the
+  catalogue, products, purchases and entitlements; none of those requests ever carry a
+  credential, and paid features fail closed with no network.
 - **Agnostic.** The broker knows nothing about any particular consumer app. Apps connect
   through a documented API.
 - **Trust by auditability.** The code that holds credentials and enforces scope is
@@ -34,28 +42,39 @@ attributable to its connection. Three layers:
 
 1. **CloudFormation stack = unit of deployment & teardown.** The live inventory is read from
    the stack; teardown = delete stack (atomic, dependency-ordered).
-2. **Mandatory tags** — `agentspoppy:account`, `agentspoppy:app`, `agentspoppy:connection`
-   on every brokered resource. Enables reconciliation against AWS (Resource Groups Tagging
-   API) to catch drift and to sweep on teardown.
+2. **Attribution tags** — `agentspoppy:account`, `agentspoppy:app`, `agentspoppy:connection`
+   on every brokered resource. Enforced by AWS on tag-scoped creates (the birth-tag
+   condition); advisory on grants written against a name pattern, where the name is the
+   scope. Enables reconciliation against AWS (Resource Groups Tagging API) to catch drift
+   and to sweep on teardown.
 3. **Append-only ledger** for out-of-stack mutations, attributed per connection.
 
 **Enforceable attribution:** scoping the vended credentials with IAM tag-conditions
-(`aws:RequestTag` on create, `aws:ResourceTag` on mutate/delete) means an app *cannot* create
-resources that aren't stamped as its own, nor touch another app's — so "show / wipe what it
-made" is a guarantee, not a convention.
+(`aws:RequestTag` on create, `aws:ResourceTag` on mutate/delete) means that *under a
+tagged-as-self grant* an app cannot create resources that aren't stamped as its own, nor
+touch another app's — AWS refuses the call. A grant scoped by a name/ARN pattern instead of
+a tag is bounded by that name, not by a tag condition. So "show / wipe what it made" is
+enforced wherever tags are the scope, and bounded-by-name everywhere else.
 
 ### How credentials are vended (the real AWS layer)
 
-The user creates **one IAM role** in their account (`ConnectedAccount.roleArn`) whose trust
-policy lets AgentsPoppy assume it. Per connection, the broker calls **STS `AssumeRole`** using
-the *operator's* own local credentials (resolved from the AWS provider chain — env, shared
-config, SSO — never stored), passing:
+The user's account holds **one IAM role** (`ConnectedAccount.roleArn`) that the account
+itself trusts, and that only the operator identity is permitted to assume. Per connection the
+broker performs **two STS hops** — the operator assumes the role plainly, then that session
+re-assumes the same role — passing on the scoped hop:
 
 - an inline **session policy** built from the connection's grants. Effective access is the
   *intersection* of the role and this policy, so it can only narrow — never widen — and every
-  tag-scoped grant is pinned with `aws:ResourceTag/agentspoppy:connection == <connection id>`;
-- the connection's attribution tags as **transitive session tags**, so anything the app
-  creates during the session is stamped with them.
+  tag-scoped grant is pinned to ownership with `aws:ResourceTag/agentspoppy:app` (the app,
+  deliberately, so a footprint survives a connection being replaced; the connection id rides
+  along as an audit tag, not the ownership pin);
+- the connection's attribution tags as **transitive session tags** — they stamp what the
+  session tags at creation and what birth-tag-conditioned grants force to be tagged; they are
+  not an automatic stamp on every possible resource.
+
+The operator credential doing the first hop is resolved from the dedicated `[agentspoppy]`
+profile the setup writes (0600), falling back to the standard AWS provider chain — stored
+locally like any CLI credential, never transmitted.
 
 The policy generation is pure and exhaustively unit-tested (`packages/broker/src/aws/policy.ts`).
 
@@ -88,14 +107,16 @@ engine, credentials, or the operator IAM policy.
 
 The user attaches **one** least-privilege policy —
 [`infra/policies/agentspoppy-access-policy.json`](../infra/policies/agentspoppy-access-policy.json) —
-to a single IAM user, and that user does the whole lifecycle: deploy the bootstrap (broker role +
-operator), **assume** the broker role to vend, **read** the account (CloudFormation + Resource
-Groups Tagging) to draw the inventory map, and **tear down**. There is no separate "deploy" vs
-"operator" credential to switch between. (The bootstrap still creates a non-admin
-`AgentsPoppyOperator` user; using its access key is optional. The activity feed attributes the
-operator by the **live** connected identity — whatever IAM user your credentials resolve to — and
-additionally always recognises the canonical `AgentsPoppyOperator`, so its events read as
-"By AgentsPoppy" whichever key you connect with.)
+to a single IAM user for day-to-day operation. Setup is the one moment that needs more: the
+pasted **setup credential** (able to create a role and a user) is used in memory to deploy the
+bootstrap — the broker role plus a limited `AgentsPoppyOperator` user — and is **never written
+to disk**; what setup persists is the operator's own key, which is the setup key *minus all
+IAM permissions* (it cannot create identities, mint keys, or widen access — the guardrail
+denies are in `role-template.ts`). "Non-admin" means exactly that subtraction: the operator
+can still assume the broker role, whose ceiling is what the role allows. (The activity feed
+attributes the operator by the **live** connected identity — whatever IAM user your
+credentials resolve to — and additionally always recognises the canonical
+`AgentsPoppyOperator`, so its events read as "By AgentsPoppy" whichever key you connect with.)
 
 **Health + policy drift.** The broker answers two questions about that credential — *do these keys
 authenticate* (`sts:GetCallerIdentity`) and *can they actually operate the account* (`sts:AssumeRole`
@@ -165,13 +186,19 @@ does). Net effect: one poppy cannot enumerate, revoke, pause, or tear down anoth
 
 ## v1 scope
 
-**In:** linked accounts · connections + consent · scoped credential vending · mandatory
+**In:** linked accounts · connections + consent · scoped credential vending · attribution
 tagging (+ IAM-condition enforcement) · per-app inventory · pause/resume/revoke/teardown ·
-per-app audit · **caller authentication (host + per-backend bootstrap tokens)** · the broker
-UI · a small client SDK.
+per-app audit · **caller authentication (host + per-backend bootstrap tokens)** · **backend
+filesystem confinement** (`backend.isolation: "strict"` — Node's permission model limits a
+poppy backend to its install dir + its data dir + temp, no child processes; a listing
+requirement since 2026-08-20, see `SECURITY_MECHANISM.md` §6.1 and RUNTIMES.md R7) · the
+**curated poppy directory** (the primary install path, with tiered mechanical review and
+verify-with-your-AI-agent audit prompts on installs and updates) · the broker UI · a small
+client SDK.
 
 **Roadmap:** full per-call enforcement proxy (sign + forward every request) · spend caps /
-per-action approval / kill-switch · trusted-apps directory · multi-cloud.
+per-action approval / kill-switch · OS-level sandboxing (App Sandbox / AppContainer /
+bubblewrap) beneath the runtime confinement · multi-cloud.
 
 ## Packages
 

@@ -1252,6 +1252,9 @@ select.field { cursor: pointer; }
 /* "Read the source" — the audit affordance every listing carries. */
 .directory-source { display: inline-flex; align-items: center; gap: 5px; margin-top: 2px; font-size: 12px; color: var(--primary-bright); text-decoration: none; }
 .directory-source:hover { text-decoration: underline; }
+/* The first-install verify affordance sits under Read-the-source; slightly smaller than
+   the review panel's audit button so the card stays calm. */
+.directory-source-verify { margin-top: 6px; font-size: 12px; padding: 4px 9px; }
 .directory-source svg { width: 12px; height: 12px; flex: 0 0 auto; }
 /* A blocked listing's notice, sized to sit inside a card instead of spanning the view. */
 .directory-note { margin: 0; padding: 7px 10px; font-size: 12.5px; }
