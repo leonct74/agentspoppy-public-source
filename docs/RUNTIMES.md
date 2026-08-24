@@ -82,8 +82,11 @@ Conclusion: **runtime provisioning is the platform's job. Poppies declare; they 
   `MAX_PACKAGE_BYTES` drops 1 GB → 256 MB.
 - **Hard-reject from day one.** No third-party poppies are live yet and both first-party
   poppies migrate in the same release — a grace period would protect nobody.
-- **R7 — Confined from the user's files (2026-08-20).** A listing with a backend MUST declare
-  `"isolation": "strict"` (requires `runtime: "node22"`): the host runs the backend under Node's
+- **R7 — Confined from the user's files (2026-08-20; the default since 0.3.5).** A listing with a
+  backend runs confined. `"isolation": "strict"` is what the host applies when the manifest says
+  nothing at all, so confinement is what you get by writing no opinion; an unconfined backend has to
+  be asked for in writing, with `"isolation": "none"`, and is then refused at listing review anyway.
+  Under strict (which requires `runtime: "node22"`): the host runs the backend under Node's
   permission model — read its install root; write only its `bootstrap.dataDir` and the OS temp
   dir; **no child processes, workers, or native addons** — so `~/.aws/credentials` and the rest
   of the user's home are denied by the RUNTIME, not by convention. Enforced at the same gates as

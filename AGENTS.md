@@ -503,8 +503,10 @@ give a file to the *user*, don't write to their Downloads folder either: serve t
 one-shot `/local-download/<token>` route and let the host's browser save it, which is both the
 native-feeling path and the one that survives confinement.
 
-**Confinement — `backend.isolation: "strict"`.** Declare it and the host runs your backend under
-the runtime's permission model, allowed to read your install directory, read and write `dataDir` and
+**Confinement — `backend.isolation: "strict"`.** You get this without asking: since AgentsPoppy
+0.3.5 it is the default, so a manifest that omits `isolation` is confined, and only an explicit
+`"isolation": "none"` opts out — which the validator, the submissions API and the update review each
+refuse. Under it the host runs your backend under the runtime's permission model, allowed to read your install directory, read and write `dataDir` and
 the OS temp directory, and *nothing else on the machine*. `~/.aws/credentials`, the user's documents
 and their browser profile all return `ERR_ACCESS_DENIED`, and spawning child processes is denied
 outright (otherwise `cat ~/.aws/credentials` walks around the whole thing). Requires
