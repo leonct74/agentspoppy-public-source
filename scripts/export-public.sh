@@ -104,6 +104,15 @@ rm -f "$STAGING/$DENYLIST_FILE"
 # sync with no decision from anyone. AUDIT-2026-08-16.md nearly did exactly that.
 INTERNAL_ONLY=(
   "docs/AUDIT-2026-08-16.md"
+  # A migration PLAN, written before the thing it plans shipped. It names an
+  # unreleased poppy, cites commits that were never pushed, discloses an unfixed
+  # weakness in a shipped poppy, leaks 38 absolute paths from the author's own
+  # machine — and, worst for a repo people read to check our claims, describes
+  # the pre-flip world in the present tense ("Today the default is unconfined").
+  # Published 2026-08-24 by mistake; an external auditor quoted it back the same
+  # day as proof confinement was still opt-in. The shipped truth lives in
+  # SECURITY_MECHANISM.md and RUNTIMES.md, which are current.
+  "docs/CONFINEMENT-MIGRATION.md"
 )
 for f in "${INTERNAL_ONLY[@]}"; do
   rm -f "$STAGING/$f"
@@ -146,6 +155,20 @@ STRAY=$(grep -rhoIE --exclude-dir=.git --exclude='*.lock' --exclude='package-loc
 if [ -n "$STRAY" ]; then
   echo "$STRAY" | sed 's/^/  /' >&2
   fail "12-digit value(s) above are not known documentation account ids — check them"
+fi
+
+# ---- Claim gate: the mirror must not contradict what shipped ----------------
+# People read this repo to check whether our claims are true. A doc left in the
+# pre-flip tense is not a cosmetic problem — on 2026-08-24 an external auditor
+# read exactly such a line and concluded, correctly from what was in front of
+# them, that backend confinement was still opt-in. Whenever a security default
+# changes, the words have to move with the code or this gate fails the export.
+CLAIM_HITS=$(grep -rInE --exclude-dir=.git --include='*.md' --include='*.ts' \
+  'default is (still )?.?"?none|defaults? to .?"?none|[Tt]oday the default is unconfined|isolation is opt-in|confinement is opt-in' \
+  "$STAGING" | grep -v 'claim-gate-ok' || true)
+if [ -n "$CLAIM_HITS" ]; then
+  echo "$CLAIM_HITS" | sed 's/^/  /' >&2
+  fail "the line(s) above say confinement is not the default — it is, since 0.3.5. Fix the words or this repo disproves our own claim"
 fi
 
 COUNT=$(find "$STAGING" -type f -not -path "*/.git/*" | wc -l | tr -d ' ')

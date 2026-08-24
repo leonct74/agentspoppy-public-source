@@ -78,7 +78,7 @@ if (feedbackProblems.length > 0) {
 // An unconfined backend is a hard failure, not advice. Before 0.3.5 this printed a
 // warning and exited 0, so the only thing standing between an unconfined poppy and a
 // user was a human remembering to read the output — and an external audit in Aug 2026
-// correctly reported the platform as "confinement is opt-in" on the strength of it.
+// correctly reported the platform as "confinement is opt-in" on the strength of it. (claim-gate-ok: historical)
 if (m.backend && effectiveIsolation(m.backend) === "none") {
   console.error(
     `✗ ${m.id} — backend is NOT confined ("isolation": "none"): it runs with the user's full
