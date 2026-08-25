@@ -191,8 +191,10 @@ tagging (+ IAM-condition enforcement) · per-app inventory · pause/resume/revok
 per-app audit · **caller authentication (host + per-backend bootstrap tokens)** · **backend
 filesystem confinement** (`backend.isolation: "strict"` — Node's permission model limits a
 poppy backend to its install dir + its data dir + temp, no child processes; a listing
-requirement since 2026-08-20, see `SECURITY_MECHANISM.md` §6.1 and RUNTIMES.md R7) · the
-**curated poppy directory** (the primary install path, with tiered mechanical review and
+requirement since 2026-08-20, and re-checked by the host at install time against the manifest it
+extracted, see `SECURITY_MECHANISM.md` §6.1–6.2 and RUNTIMES.md R7) · the
+**curated poppy directory** (the primary install path, with tiered mechanical review,
+package-integrity gates so the reviewed bytes and the installed bytes cannot diverge, and
 verify-with-your-AI-agent audit prompts on installs and updates) · the broker UI · a small
 client SDK.
 

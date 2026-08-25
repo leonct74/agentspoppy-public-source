@@ -16,7 +16,7 @@
 import { createHash } from "node:crypto";
 import { chmod, mkdir, readFile, rename, rm, stat } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
-import { parseManifest, type ExtensionManifest } from "@agentspoppy/extension-sdk";
+import { effectiveIsolation, parseManifest, type ExtensionManifest } from "@agentspoppy/extension-sdk";
 import { BrokerError } from "../service";
 import type { ExtensionRegistry } from "./registry";
 import { extractZip } from "./zip";
@@ -68,6 +68,15 @@ export interface DirectoryEntry {
    *  A host older than this must neither install nor offer the update — otherwise the
    *  user gets a button that can only fail (the VPN-Poppy 0.1.3 perpetual-update class). */
   minHost?: string;
+  /** Set by a human reviewer for the one sanctioned unconfined release: a named,
+   *  one-release data migration that must move state out of the user's home before
+   *  its confined successor ships (RUNTIMES.md R7).
+   *
+   *  It lives on the LISTING, never in the package, and that is the whole point. A
+   *  package that could declare itself exempt is not gated at all — which is exactly
+   *  how a shadowed second manifest ("isolation": "none") would install unconfined
+   *  behind a review that read the first one. Absent means confined-or-refused. */
+  allowUnconfined?: boolean;
 }
 
 /** A listing enriched with this host's local state, for the app's Directory view. */
@@ -736,6 +745,18 @@ export class DirectoryService {
           `refusing a package that doesn't match its listing. Nothing was installed.`,
       );
     }
+    // Confinement is verified against what was actually EXTRACTED, not against what
+    // the listing or the reviewer read. Both zip readers now refuse an archive that
+    // names extension.json twice, but this is the check that does not depend on them
+    // catching it: a catalog install whose manifest asks to run unconfined is refused
+    // here, on the bytes that will actually run.
+    if (manifest.backend && effectiveIsolation(manifest.backend) === "none" && !entry.allowUnconfined) {
+      throw new BrokerError(
+        "bad_request",
+        `"${entry.name}" asks to run without confinement, which means full access to your files including your AWS credentials. ` +
+          `The directory only lists confined poppies, so this package does not match its listing. Nothing was installed.`,
+      );
+    }
     return manifest;
   }
 
@@ -905,6 +926,8 @@ function parseCatalog(raw: string): DirectoryEntry[] {
       continue;
     }
     const entry = p as unknown as DirectoryEntry;
+    // Untrusted JSON: only a real `true` exempts a listing, never a truthy string.
+    entry.allowUnconfined = p.allowUnconfined === true;
     if (!conformingName(entry.name)) {
       console.warn(`directory: dropped catalog entry "${entry.name}" (${entry.id}) — its name breaks the naming convention`);
       continue;

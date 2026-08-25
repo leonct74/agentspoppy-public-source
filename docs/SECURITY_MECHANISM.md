@@ -150,7 +150,7 @@ Two channels, and they close differently:
 | Channel | Status |
 |---|---|
 | **Environment** — `AWS_*` inherited from the process that launched AgentsPoppy | **Closed.** `poppyEnv()` in `extensions/backend-host.ts` strips the entire `AWS_*` namespace from every spawned backend's environment. The whole prefix rather than a list of known names, so a variable AWS invents later is covered by construction. Enforced by a real-spawn test. |
-| **Filesystem** — reading `~/.aws/credentials` directly | **Closed for every listed poppy (2026-08-20).** A backend declaring `backend.isolation: "strict"` runs under the runtime's permission model and is denied every path outside its own three (below). Every first-party poppy with a backend now declares it (see below), and an unconfined backend is refused at listing review (RUNTIMES.md R7). **Since 0.3.5 the field itself defaults to `"strict"`**: omitting it confines the backend, and running unconfined requires writing `"isolation": "none"` deliberately. Three independent gates then refuse that: the manifest validator exits non-zero, the submissions API rejects the listing server-side (re-reading the manifest from the uploaded bytes), and the mechanical update review refuses a `strict`→`none` downgrade. The host additionally logs an explicit unconfined-start warning. The one sanctioned exception is a named, one-release data migration (docs/CONFINEMENT.md). |
+| **Filesystem** — reading `~/.aws/credentials` directly | **Closed for every listed poppy (2026-08-20).** A backend declaring `backend.isolation: "strict"` runs under the runtime's permission model and is denied every path outside its own three (below). Every first-party poppy with a backend now declares it (see below), and an unconfined backend is refused at listing review (RUNTIMES.md R7). **Since 0.3.5 the field itself defaults to `"strict"`**: omitting it confines the backend, and running unconfined requires writing `"isolation": "none"` deliberately. Three independent gates then refuse that: the manifest validator exits non-zero, the submissions API rejects the listing server-side (re-reading the manifest from the uploaded bytes), and the mechanical update review refuses a `strict`→`none` downgrade. The host additionally logs an explicit unconfined-start warning. **Since 0.3.6 the HOST verifies it too**, on the bytes it extracted rather than on the bytes a reviewer read: a catalog install whose manifest asks to run unconfined is refused at install time unless the *listing* carries `allowUnconfined` (the sanctioned migration, granted by a reviewer — a package cannot declare its own exemption). The one sanctioned exception is a named, one-release data migration (docs/CONFINEMENT.md). |
 
 **Why the environment one mattered.** Nothing had to go wrong for it to leak: a developer
 who exports `AWS_ACCESS_KEY_ID` in the shell they launch AgentsPoppy from was handing every
@@ -237,6 +237,31 @@ approving a connection sees a careful breakdown of AWS grants and no mention tha
 code is about to run on their machine. For this threat that line matters more than any
 single grant.
 
+### 6.2 Reviewed bytes and installed bytes are the same bytes
+
+A checksum proves an archive did not change between review and install. It does **not** prove
+that both sides read the same thing *inside* it, and two places got that wrong.
+
+**Duplicate entry names.** A ZIP may legally name the same file twice. The reviewer searched the
+entry list and took the first `extension.json`; the host's extractor wrote every entry in turn,
+so the last one landed on disk. One archive, one sha256, two manifests — the reviewed one
+`strict`, the installed one `none`. Both readers now **refuse** an archive that names any file
+more than once (`store-zip.mjs`, `extensions/zip.ts`). In the extractor the check is a pre-pass
+over the central directory, deliberately: refusing part-way through leaves earlier entries
+already written, and the attacker chooses the order.
+
+**Per-platform packages.** A listing may declare one package per platform. Both server-side
+gates resolved `packages["any"] ?? first`, while the host resolves
+`packages[<platform>] ?? "any"` — opposite ends. `{ any: clean, darwin-arm64: hostile }` was
+reviewed clean and installed hostile on every Mac. Submission and admin approval now verify
+**every** package a listing declares, and an update auto-publishes only if all of them pass.
+
+**The install-time backstop.** Neither of the above is the last line. The host re-checks
+confinement against the manifest it actually extracted, so the refusal does not depend on a
+reader catching the trick. Authority for the one exemption sits on the listing
+(`allowUnconfined`), never in the package — a package that can declare itself exempt is not
+gated at all.
+
 ## 7. Change history
 
 - **2026-08-20** — §6.1's filesystem channel CLOSED fleet-wide. Every listed first-party
@@ -248,6 +273,12 @@ single grant.
   carries `installedIsolation` so a strict→none downgrade is visible to the agent.
   hello-poppy and the developer docs (AGENTS.md, STARTER_PROMPT.md) now model strict as
   the shape a poppy is built in.
+- **2026-08-24** — §6.2 added. Both zip readers refuse duplicate entry names, both submission
+  gates verify every declared per-platform package, and the host re-checks confinement on the
+  manifest it extracted (exemption via the listing's `allowUnconfined`, not the package). Closes
+  a route by which a package could be reviewed as confined and installed unconfined under a
+  matching sha256. `extensions/zip.ts`, `extensions/directory.ts`, `store-zip.mjs`, the
+  submissions and admin-approval routes.
 - **2026-08-10** — §6.1 added. `poppyEnv()` strips the whole `AWS_*` namespace (and any
   inherited `NODE_OPTIONS`) from every spawned backend's environment; before this, a poppy
   launched from a shell holding `AWS_ACCESS_KEY_ID` inherited the operator's long-lived key

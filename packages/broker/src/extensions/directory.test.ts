@@ -647,6 +647,40 @@ describe("DirectoryService", () => {
     const dev = directory({ [CATALOG_URL]: catalogJson(pkg, { minHost: "9.9.9" }), [PACKAGE_URL]: pkg });
     await expect(dev.install(POPPY_ID)).resolves.toEqual({ ok: true, extensionId: POPPY_ID });
   });
+
+  // The install-time confinement gate. It exists so the refusal does not depend on
+  // either zip reader catching a shadowed second manifest: whatever ends up on disk
+  // is what gets checked, and a catalog listing only ever serves confined poppies.
+  describe("unconfined packages", () => {
+    it("refuses a catalog install whose extracted manifest opts out of confinement", async () => {
+      const pkg = packageZip(manifestJson({ backend: { entry: "backend/bin", runtime: "node22", isolation: "none" } }));
+      const dir = directory({ [CATALOG_URL]: catalogJson(pkg), [PACKAGE_URL]: pkg });
+      await expect(dir.install(POPPY_ID)).rejects.toThrow(/without confinement/);
+    });
+
+    it("installs it when the LISTING grants the sanctioned migration exemption", async () => {
+      const pkg = packageZip(manifestJson({ backend: { entry: "backend/bin", runtime: "node22", isolation: "none" } }));
+      const dir = directory({
+        [CATALOG_URL]: catalogJson(pkg, { allowUnconfined: true }),
+        [PACKAGE_URL]: pkg,
+      });
+      await expect(dir.install(POPPY_ID)).resolves.toMatchObject({ extensionId: POPPY_ID });
+    });
+
+    it("does not accept a truthy non-boolean as the exemption", async () => {
+      const pkg = packageZip(manifestJson({ backend: { entry: "backend/bin", runtime: "node22", isolation: "none" } }));
+      const dir = directory({
+        [CATALOG_URL]: catalogJson(pkg, { allowUnconfined: "yes" }),
+        [PACKAGE_URL]: pkg,
+      });
+      await expect(dir.install(POPPY_ID)).rejects.toThrow(/without confinement/);
+    });
+
+    it("leaves a confined package alone", async () => {
+      const pkg = packageZip(manifestJson({ backend: { entry: "backend/bin", runtime: "node22", isolation: "strict" } }));
+      const dir = directory({ [CATALOG_URL]: catalogJson(pkg), [PACKAGE_URL]: pkg });
+      await expect(dir.install(POPPY_ID)).resolves.toMatchObject({ extensionId: POPPY_ID });
+    });
 });
 
 describe("versionAtLeast", () => {
@@ -803,5 +837,6 @@ describe("renameWithRetry", () => {
     };
     await expect(renameWithRetry("a", "b", gone, 0)).rejects.toThrow("ENOENT");
     expect(calls).toBe(1);
+  });
   });
 });

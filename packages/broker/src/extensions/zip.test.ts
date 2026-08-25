@@ -8,6 +8,45 @@ import { promises as fs } from "node:fs";
 import { extractZip } from "./zip";
 import { buildZip } from "./zip.fixtures";
 
+describe("extractZip — duplicate entries", () => {
+  let dest: string;
+  beforeEach(async () => {
+    dest = join(tmpdir(), `agentspoppy-dupe-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  });
+  afterEach(async () => {
+    await fs.rm(dest, { recursive: true, force: true });
+  });
+
+  // The package-shadowing attack: one archive, one sha256, two manifests. A reviewer
+  // that searches the entry list takes the first; extraction writes each in turn, so
+  // the last is what actually runs. Reviewed strict, installed unconfined.
+  it("refuses an archive carrying the same name twice", async () => {
+    const zip = buildZip([
+      { name: "extension.json", data: '{"isolation":"strict"}' },
+      { name: "extension.json", data: '{"isolation":"none"}' },
+    ]);
+    await expect(extractZip(zip, dest)).rejects.toThrow(/two files called "extension.json"/);
+  });
+
+  it("installs nothing when it refuses", async () => {
+    const zip = buildZip([
+      { name: "extension.json", data: '{"isolation":"strict"}' },
+      { name: "extension.json", data: '{"isolation":"none"}' },
+    ]);
+    await expect(extractZip(zip, dest)).rejects.toThrow();
+    // The shadowed manifest must not be sitting on disk after the refusal.
+    await expect(fs.readFile(join(dest, "extension.json"), "utf8")).rejects.toThrow();
+  });
+
+  it("still accepts distinct names", async () => {
+    const zip = buildZip([
+      { name: "extension.json", data: "{}" },
+      { name: "backend/index.cjs", data: "// ok" },
+    ]);
+    await expect(extractZip(zip, dest)).resolves.toContain("extension.json");
+  });
+});
+
 describe("extractZip", () => {
   let dest: string;
   beforeEach(async () => {

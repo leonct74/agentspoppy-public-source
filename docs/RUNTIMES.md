@@ -85,7 +85,10 @@ Conclusion: **runtime provisioning is the platform's job. Poppies declare; they 
 - **R7 — Confined from the user's files (2026-08-20; the default since 0.3.5).** A listing with a
   backend runs confined. `"isolation": "strict"` is what the host applies when the manifest says
   nothing at all, so confinement is what you get by writing no opinion; an unconfined backend has to
-  be asked for in writing, with `"isolation": "none"`, and is then refused at listing review anyway.
+  be asked for in writing, with `"isolation": "none"`, and is then refused at listing review anyway —
+  and, since 0.3.6, refused again by the HOST at install time, checked against the manifest actually
+  extracted from the package. The sanctioned migration exemption is granted on the LISTING
+  (`allowUnconfined`, set by a reviewer), never by the package about itself.
   Under strict (which requires `runtime: "node22"`): the host runs the backend under Node's
   permission model — read its install root; write only its `bootstrap.dataDir` and the OS temp
   dir; **no child processes, workers, or native addons** — so `~/.aws/credentials` and the rest

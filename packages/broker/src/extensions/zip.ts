@@ -95,6 +95,19 @@ export async function extractZip(bytes: Uint8Array, destDir: string): Promise<st
   const destRoot = resolve(destDir);
   const decoder = new TextDecoder();
   const extracted: string[] = [];
+  // Duplicate names are rejected BEFORE anything is written. A ZIP may legally
+  // carry the same name twice, and the two readers of a package disagree about
+  // which one is real: a reviewer that searches for "extension.json" takes the
+  // FIRST, while extraction writes each entry in turn so the LAST lands on disk.
+  // One file, one checksum, two different manifests — the reviewed one strict, the
+  // installed one unconfined.
+  //
+  // The check must be a PRE-PASS, not a test inside the write loop: refusing on the
+  // second entry leaves the first already written, and the attacker chooses the
+  // order, so the malicious copy would be the one on disk while the error claimed
+  // nothing was installed. (Caught by its own regression test, not by review.)
+  assertNoDuplicateNames(view, bytes, cdOffset, eocd, totalEntries, decoder);
+
   let p = cdOffset;
   for (let i = 0; i < totalEntries; i++) {
     if (p + 46 > eocd || view.getUint32(p, true) !== CENTRAL_SIG) {
@@ -152,4 +165,35 @@ export async function extractZip(bytes: Uint8Array, destDir: string): Promise<st
     extracted.push(name);
   }
   return extracted;
+}
+
+/**
+ * Walk the central directory reading nothing but entry names, and refuse the archive
+ * if any name repeats. Separate from the extraction loop so the refusal happens with
+ * an untouched destination directory.
+ */
+function assertNoDuplicateNames(
+  view: DataView,
+  bytes: Uint8Array,
+  cdOffset: number,
+  eocd: number,
+  totalEntries: number,
+  decoder: InstanceType<typeof TextDecoder>,
+): void {
+  const seen = new Set<string>();
+  let p = cdOffset;
+  for (let i = 0; i < totalEntries; i++) {
+    if (p + 46 > eocd || view.getUint32(p, true) !== CENTRAL_SIG) return; // the main loop reports malformed archives
+    const nameLen = view.getUint16(p + 28, true);
+    const extraLen = view.getUint16(p + 30, true);
+    const commentLen = view.getUint16(p + 32, true);
+    const name = decoder.decode(bytes.subarray(p + 46, p + 46 + nameLen));
+    if (seen.has(name)) {
+      throw new Error(
+        `This package contains two files called "${name}", so what it declares and what it installs could differ. Nothing was installed. — duplicate ZIP entry`,
+      );
+    }
+    seen.add(name);
+    p += 46 + nameLen + extraLen + commentLen;
+  }
 }
