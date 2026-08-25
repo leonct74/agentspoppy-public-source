@@ -54,3 +54,44 @@ describe("UpdateBanner", () => {
     expect(u.relaunch).not.toHaveBeenCalled();
   });
 });
+
+describe("UpdateBanner on Windows", () => {
+  // The Store does not let an app install its own update, so the mac/Linux button would be
+  // a promise this channel cannot keep. But "the Store does it for you" is only true by
+  // default: auto-update is a setting the user can switch off, and even on, it can lag by
+  // days. So the copy hedges and the button opens the listing.
+  it("does not offer to install the update itself", async () => {
+    render(<UpdateBanner check={async () => update()} onWindows />);
+    await screen.findByText(/is available/);
+    expect(screen.queryByText("Update & restart")).toBeNull();
+  });
+
+  it("offers the Store instead, without claiming the update is automatic", async () => {
+    render(<UpdateBanner check={async () => update()} onWindows />);
+    await screen.findByText(/is available/);
+    expect(screen.getByText("Open Microsoft Store")).toBeTruthy();
+    expect(screen.getByText(/usually installs Store updates on its own/)).toBeTruthy();
+  });
+
+  it("still offers to install on macOS and Linux", async () => {
+    render(<UpdateBanner check={async () => update()} onWindows={false} />);
+    await screen.findByText(/is available/);
+    expect(screen.getByText("Update & restart")).toBeTruthy();
+    expect(screen.queryByText("Open Microsoft Store")).toBeNull();
+  });
+});
+
+describe("UpdateBanner release notes", () => {
+  // The feed has always carried notes and the banner always dropped them, so people were
+  // asked to accept an update without being told what was in it.
+  it("shows the first line of the notes it already downloads", async () => {
+    render(<UpdateBanner check={async () => update({ body: "**Confinement is the default now.**\n\nMore detail." })} onWindows={false} />);
+    expect(await screen.findByText(/Confinement is the default now/)).toBeTruthy();
+  });
+
+  it("renders nothing extra when the release has no notes", async () => {
+    const { container } = render(<UpdateBanner check={async () => update({ body: "" })} onWindows={false} />);
+    await screen.findByText(/is available/);
+    expect(container.querySelector(".update-banner__notes")).toBeNull();
+  });
+});

@@ -279,6 +279,30 @@ a { color: var(--crimson); }
 .update-banner { justify-content: flex-start; flex-wrap: wrap; }
 .update-banner p { margin: 0; flex: 1 1 auto; }
 .update-banner__actions { display: flex; gap: 8px; align-items: center; flex: 0 0 auto; }
+/* The one line of release notes the banner has always downloaded and never shown. */
+.update-banner__notes { margin: 4px 0 0 !important; color: var(--muted-2); font-size: 13px; }
+
+/* What's new — the version in the statusline, and the panel it opens. On a Microsoft Store
+   install this is the only place a user learns that the app changed at all. */
+.whats-new__version { font: inherit; color: var(--muted); padding: 0; }
+.whats-new__version:hover { color: var(--text); }
+.whats-new {
+  position: fixed; right: 16px; bottom: 44px; z-index: 40;
+  width: min(440px, calc(100vw - 32px)); max-height: min(60vh, 560px); overflow-y: auto;
+  background: var(--surface-2); border: 1px solid var(--border-strong);
+  border-radius: var(--radius); padding: 16px 18px 18px;
+  box-shadow: 0 12px 32px -12px rgba(0,0,0,.7);
+}
+.whats-new__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.whats-new__head h2 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 15px; }
+.whats-new__head h2 > svg { width: 16px; height: 16px; color: var(--primary); }
+.whats-new__release + .whats-new__release { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+.whats-new__release h3 { margin: 0 0 2px; font-size: 13px; display: flex; align-items: baseline; gap: 8px; }
+.whats-new__date { color: var(--muted); font-weight: 400; font-size: 12px; }
+.whats-new__summary { margin: 0 0 8px; font-size: 14px; }
+.whats-new ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
+.whats-new li { font-size: 13px; color: var(--muted-2); }
+.whats-new__empty { margin: 0; font-size: 13px; color: var(--muted-2); }
 .notice--warn > svg { color: var(--warn); }
 .notice > p { margin: 0; flex: 1 1 auto; }
 .notice > .btn.link { flex: 0 0 auto; }

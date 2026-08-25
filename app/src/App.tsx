@@ -17,6 +17,7 @@ import { PurchasesView } from "./views/PurchasesView";
 import { OnboardingSplash } from "./views/OnboardingSplash";
 import { ApprovalsBar } from "./components/ApprovalsBar";
 import { UpdateBanner } from "./components/UpdateBanner";
+import { WhatsNew } from "./components/WhatsNew";
 import { Sidebar, type ActiveSection } from "./components/Sidebar";
 import { Icon } from "./components/Icon";
 import { poppyAccent } from "./lib/poppyAccent";
@@ -612,6 +613,11 @@ export function App() {
         <span className={awsHealth === "healthy" ? "statusline__ok" : "statusline__warn"}>{healthWord}</span>
         <span className="statusline__spacer" />
         {region && <span>{region}</span>}
+        <span className="statusline__sep">│</span>
+        {/* The first place the app has ever told a user which version they are running —
+            and the way back into What's new after it has been dismissed. On a Microsoft
+            Store install this is the only signal that anything changed at all. */}
+        <WhatsNew />
       </div>
 
       {showSplash && (
