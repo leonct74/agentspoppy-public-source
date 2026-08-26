@@ -30,6 +30,7 @@ const PROTECTED = [
   // compiled policy actually permits — so weakening them IS a mechanism change.
   "packages/core/src/permissions-rating.test.ts",
   "packages/broker/src/aws/rating-matches-compiler.test.ts",
+  "packages/broker/src/aws/tag-adoption.test.ts", // pins I2's precondition: the ownership tag is not self-writable
   "packages/broker/src/certify.ts",
   "scripts/certify.ts",
   "docs/SECURITY_MECHANISM.md", // the spec itself — rewriting the law is changing the mechanism

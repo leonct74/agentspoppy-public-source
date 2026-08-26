@@ -270,8 +270,20 @@ export function scopeIsUnbounded(scope: string, service = ""): boolean {
   // (`function:name`, `table/name`), and skip a leading empty segment from a path-style
   // resource like apigateway's `/apis*`.
   const first = rest.split(/[/:]/).find((seg) => seg !== "");
-  return first === undefined || first === "*";
+  // A segment made only of WILDCARD CHARACTERS narrows nothing. IAM treats "?" as a
+  // single-character wildcard, so `instance/?*` matches every instance in the account
+  // while reading, to a literal-string test, like a name pattern. Testing for "*" alone
+  // let that through — and it is the kind of thing a hostile manifest reaches for
+  // precisely because it looks specific.
+  return first === undefined || /^[*?]+$/.test(first);
 }
+
+// KNOWN LIMIT, and not solvable syntactically: a pattern can be a genuine name prefix and
+// still match everything, because AWS ids have fixed prefixes — `instance/i-*` matches
+// every EC2 instance, `userpool/eu-west-1_*` every pool in the region. Nothing in the ARN
+// distinguishes that from `table/CrewPoppy*`, which really does narrow. Recognising it
+// would need a per-service table of id formats. Documented in docs/specs/tag-adoption.md
+// rather than papered over.
 
 /** One plain-language line describing a grant's blast radius. */
 export function describeGrant(grant: PermissionGrant): string {

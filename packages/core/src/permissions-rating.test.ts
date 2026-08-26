@@ -293,3 +293,21 @@ describe("adversarial review follow-ups", () => {
   });
 });
 
+// From the adversarial review of the tag-adoption fix: "?" is an IAM single-character
+// wildcard, so a scope ending "/?*" reaches everything while a literal test for "*" reads
+// it as a name pattern — rating it amber and describing it as confined.
+describe("wildcard characters other than * also mean 'not narrowed'", () => {
+  it("does not call a question-mark wildcard scoped", () => {
+    for (const scope of ["arn:aws:iam::*:role/?*", "arn:aws:ec2:*:*:instance/?*", "arn:aws:s3:::?*"]) {
+      expect(assessGrant(grant("iam", "iam:CreateRole", scope)).scoped, scope).toBe(false);
+    }
+  });
+
+  // A KNOWN LIMIT, asserted so nobody mistakes it for solved: AWS ids have fixed prefixes,
+  // so "instance/i-*" matches every instance while being a genuine name prefix. Nothing in
+  // the ARN separates it from "table/CrewPoppy*", which really does narrow.
+  it("still reads an id-prefix pattern as scoped — documented, not fixed", () => {
+    expect(assessGrant(grant("ec2", "ec2:TerminateInstances", "arn:aws:ec2:*:*:instance/i-*")).scoped).toBe(true);
+  });
+});
+

@@ -32,7 +32,22 @@ beyond the role the user installed.
 delete action is conditioned on `aws:ResourceTag/agentspoppy:app == <appId>`: a resource
 that doesn't carry the app's own tag is invisible and untouchable. Name-scoped grants
 achieve the same confinement by ARN pattern.
-*Pinned by:* `policy.test.ts` "splits a tag-scoped grant…" (rest-statement assertion).
+
+**I2 has a precondition, and it was violated in production** *(added 2026-08-26)*. The
+condition is only worth anything while the app cannot write the tag it is judged by.
+Six of the seven shipped poppies held an unconditioned power to write tags on every
+resource of some type — so the lock and the key were in the same hand: stamp
+`agentspoppy:app` onto another poppy's user pool, or onto a server the user made, and I2
+then authorises acting on it. **A tag write on a scope that does not narrow must itself be
+conditioned**: permitted only as part of a create the app is making (`ec2:CreateAction`,
+which leaves no residual path), or — where the service cannot prove that — only onto a
+resource not already claimed, plus a separate allow for re-tagging what is already the
+app's own. A service whose tag actions support neither condition key cannot hold an
+unnarrowed tag write at all and must be name-scoped; a service that has not been checked
+is **refused at compile time**, never emitted unconditioned.
+*Pinned by:* `policy.test.ts` "splits a tag-scoped grant…" (rest-statement assertion);
+`aws/tag-adoption.test.ts` (every unnarrowed tag write is conditioned, untag never carries
+a request-tag condition, unchecked services are refused).
 
 **I3 — Born-tagged-or-refused** *(added 2026-07-23)*. Under a `tagged-as-self` grant,
 create-class actions (`Create*` / `Request*`) are conditioned on
@@ -296,6 +311,27 @@ reader catching the trick. Authority for the one exemption sits on the listing
 gated at all.
 
 ## 7. Change history
+
+- **2026-08-26** — tag adoption closed in the compiler (`docs/specs/tag-adoption.md`).
+  I2 says an app may touch only what carries its own tag; six of seven shipped poppies
+  could also WRITE that tag on every resource of some type, so the guarantee was
+  self-defeating. VM-Poppy was the complete chain — `ec2:DescribeInstances` on `*` to
+  enumerate, `ec2:CreateTags` on `*` to claim, then `TerminateInstances` under its
+  tagged-as-self grant. An unnarrowed tag write now compiles to conditioned statements:
+  EC2 uses `ec2:CreateAction`, which authorises tagging only as the tagging half of a
+  create the poppy is making and so removes the claim path entirely; cognito-idp,
+  guardduty and amplify use claim-if-unclaimed plus re-tag-your-own. **Both halves are
+  load-bearing** — CloudFormation issues tag updates as deltas that do not restate
+  `agentspoppy:app`, so the second allow is what keeps every release working; shipping
+  only the first would have reproduced CrewPoppy's 30 July rollback for every user, which
+  is also why this REPLACES fault F's proposed blanket deny on `agentspoppy:*` tag writes.
+  Services are listed per-service because a condition key a service does not populate is a
+  permanent deny (s3:PutBucketTagging supports neither, and must stay name-scoped);
+  anything unlisted is refused at compile time rather than guessed at. Name-scoped and
+  `tagged-as-self` tag writes are untouched — they were already confined.
+  Compiler-side only: no bootstrap re-apply, no manifest change, no re-consent.
+  `aws/policy.ts`. **Shape is unit-tested; AWS's evaluation of the conditions needs a
+  canary deploy per service before rollout.**
 
 - **2026-08-26** — faults C and E from the 16 August adversarial review closed
   (`docs/specs/scope-policy-and-rating.md`).
