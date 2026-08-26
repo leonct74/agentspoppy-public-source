@@ -95,3 +95,26 @@ describe("UpdateBanner release notes", () => {
     expect(container.querySelector(".update-banner__notes")).toBeNull();
   });
 });
+
+describe("UpdateBanner re-checks", () => {
+  // Checking only at startup is why a running app never noticed 0.3.6: the app had been
+  // open since before it was published, so the one check had already happened.
+  it("checks again when the window regains focus", async () => {
+    const check = vi.fn().mockResolvedValueOnce(null).mockResolvedValue(update());
+    render(<UpdateBanner check={check} onWindows={false} />);
+    await waitFor(() => expect(check).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/is available/)).toBeNull();
+
+    window.dispatchEvent(new Event("focus"));
+    expect(await screen.findByText(/is available/)).toBeTruthy();
+  });
+
+  it("stops checking once unmounted", async () => {
+    const check = vi.fn().mockResolvedValue(null);
+    const { unmount } = render(<UpdateBanner check={check} onWindows={false} />);
+    await waitFor(() => expect(check).toHaveBeenCalledTimes(1));
+    unmount();
+    window.dispatchEvent(new Event("focus"));
+    expect(check).toHaveBeenCalledTimes(1);
+  });
+});

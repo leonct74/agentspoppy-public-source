@@ -70,7 +70,17 @@ export function WhatsNew({
 
   if (!loaded || !version) return null;
 
-  const shown = open ? notesSince(seenBefore === version ? null : seenBefore, version, notes) : [];
+  // The panel lists EVERY release, not just the ones since last launch. Showing only
+  // what changed answers "what am I accepting?" and nothing else — reopen it a day later
+  // and the history is gone, so there is no way to look back at what a version did. So:
+  // the whole list, with the releases this user has not seen yet marked.
+  // Nothing is "new" when this version has already been seen, or on a first run. Passing
+  // null to notesSince here would return the CURRENT release and badge it New to someone
+  // who has been running it for a week.
+  const unseen =
+    seenBefore && seenBefore !== version
+      ? new Set(notesSince(seenBefore, version, notes).map((n) => n.version))
+      : new Set<string>();
 
   return (
     <>
@@ -89,15 +99,20 @@ export function WhatsNew({
             </button>
           </div>
 
-          {shown.length === 0 ? (
+          {notes.length === 0 ? (
             <p className="whats-new__empty">
               You&rsquo;re on AgentsPoppy {version}. There are no notes for this version.
             </p>
           ) : (
-            shown.map((n) => (
-              <section key={n.version} className="whats-new__release">
+            notes.map((n) => (
+              <section
+                key={n.version}
+                className={`whats-new__release${unseen.has(n.version) ? " is-new" : ""}`}
+              >
                 <h3>
                   {n.version}
+                  {unseen.has(n.version) && <span className="whats-new__badge">New</span>}
+                  {n.version === version && <span className="whats-new__badge is-current">You have this</span>}
                   {n.date ? <span className="whats-new__date">{n.date}</span> : null}
                 </h3>
                 <p className="whats-new__summary">{n.summary}</p>

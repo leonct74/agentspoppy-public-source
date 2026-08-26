@@ -63,13 +63,22 @@ vi.mock("@aws-sdk/client-iam", () => {
   class CreatePolicyCommand {
     constructor(public input: Record<string, unknown>) {}
   }
+  // The scope-policy read-back (fault C) imports these two as well. Here every name
+  // is free, so CreatePolicy always succeeds and neither is ever sent — but the
+  // import itself must resolve. Their behaviour is covered by sts-scope-policy.test.ts.
+  class GetPolicyCommand {
+    constructor(public input: Record<string, unknown>) {}
+  }
+  class GetPolicyVersionCommand {
+    constructor(public input: Record<string, unknown>) {}
+  }
   class IAMClient {
     async send(cmd: CreatePolicyCommand) {
       state.createdPolicies.push(cmd.input);
       return {};
     }
   }
-  return { IAMClient, CreatePolicyCommand };
+  return { IAMClient, CreatePolicyCommand, GetPolicyCommand, GetPolicyVersionCommand };
 });
 
 const PACKED_ERROR = Object.assign(

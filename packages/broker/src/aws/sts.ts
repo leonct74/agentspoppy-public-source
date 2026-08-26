@@ -211,6 +211,62 @@ export function splitPolicyDocument(policyJson: string, budget = MANAGED_POLICY_
 }
 
 /**
+ * Parse an IAM policy document, which arrives in one of two forms: the raw JSON we
+ * compiled, or the URL-encoded form IAM stores and hands back.
+ *
+ * Raw JSON is tried FIRST, and the order is load-bearing. IAM's encoded form begins
+ * `%7B%22Version%22…`, which is never valid JSON, so trying raw first is unambiguous.
+ * Decoding first is not: a document legitimately containing a valid escape sequence —
+ * a `%20` inside a resource name or condition value — would be silently rewritten
+ * into different text that still parses, and we would refuse our OWN policy. That is
+ * an outage, arrived at through a security check, which is the worst way to get one.
+ */
+function parsePolicyDocument(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return JSON.parse(decodeURIComponent(raw));
+  }
+}
+
+/**
+ * A canonical form for comparison: object keys sorted recursively, and a one-element
+ * array collapsed to its element (IAM treats `"x"` and `["x"]` as the same value and
+ * may hand back either). Array ORDER is preserved, so two documents differing only in
+ * statement order compare as different — erring toward refusing, not toward accepting.
+ */
+function canonicalisePolicy(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    const items = value.map(canonicalisePolicy);
+    return items.length === 1 ? items[0] : items;
+  }
+  if (value && typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    return Object.fromEntries(Object.keys(obj).sort().map((k) => [k, canonicalisePolicy(obj[k])]));
+  }
+  return value;
+}
+
+/**
+ * True if two policy documents mean the same thing. The comparison MUST be semantic:
+ * IAM stores documents URL-encoded and returns them with its own whitespace and key
+ * order, so a byte comparison would reject AgentsPoppy's OWN policy on every vend
+ * after the first — turning a security check into an outage. Anything unparseable
+ * compares as different: a document we cannot read is one we cannot vouch for.
+ * Exported for unit tests.
+ */
+export function policyDocumentsMatch(a: string, b: string): boolean {
+  try {
+    return (
+      JSON.stringify(canonicalisePolicy(parsePolicyDocument(a))) ===
+      JSON.stringify(canonicalisePolicy(parsePolicyDocument(b)))
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Ensure one managed scope policy exists for the given document, returning its ARN.
  * The policy name is *content-addressed* — it embeds a short hash of the document —
  * so we create-if-missing and reuse an identical doc, but any change to the document
@@ -230,7 +286,8 @@ async function ensureScopePolicyDoc(brokerCreds: SessionCreds, p: AssumeRolePara
   const name = `AgentsPoppyScope-${p.connectionId}-${sig}`.slice(0, 128);
   const arn = `arn:aws:iam::${p.accountId}:policy/${name}`;
 
-  const { IAMClient, CreatePolicyCommand } = await import("@aws-sdk/client-iam");
+  const { IAMClient, CreatePolicyCommand, GetPolicyCommand, GetPolicyVersionCommand } =
+    await import("@aws-sdk/client-iam");
   const iam = new IAMClient({ region: p.region, credentials: brokerCreds });
   try {
     await iam.send(
@@ -240,9 +297,47 @@ async function ensureScopePolicyDoc(brokerCreds: SessionCreds, p: AssumeRolePara
         Description: "AgentsPoppy per-connection session scope — used only as an AssumeRole session bound (restricts, never grants).",
       }),
     );
+    return arn;
   } catch (err) {
-    // Identical document already created → reuse it (content-addressed name).
     if (!/EntityAlreadyExists/i.test((err as { name?: string }).name ?? "")) throw err;
+  }
+
+  // Something already occupies the content-addressed name. This used to be assumed to
+  // be an identical document and reused UNREAD — but every input to the name is known
+  // to the poppy in advance (the host hands a backend its own connection id at start,
+  // and the document compiles deterministically from the poppy's own manifest), so a
+  // poppy holding a policy write could plant `Allow *:*` at that exact name and have
+  // its own NEXT vend bound to a document it wrote itself. Read it back instead.
+  //
+  // The DEFAULT version specifically: CreatePolicyVersion(SetAsDefault) leaves the
+  // policy object intact and swaps only the version STS actually dereferences, so
+  // merely confirming that a policy exists — or reading v1 — would miss it entirely.
+  let existing: string | undefined;
+  try {
+    const meta = await iam.send(new GetPolicyCommand({ PolicyArn: arn }));
+    const versionId = meta.Policy?.DefaultVersionId;
+    if (!versionId) throw new Error("policy has no default version");
+    const version = await iam.send(new GetPolicyVersionCommand({ PolicyArn: arn, VersionId: versionId }));
+    existing = version.PolicyVersion?.Document;
+  } catch (readErr) {
+    // Unverifiable is treated exactly like hostile. Refusing costs one failed vend;
+    // proceeding would bind a session to a document nobody has read.
+    throw new Error(
+      `refusing to vend credentials: could not read the existing IAM policy ${name} to confirm AgentsPoppy wrote it ` +
+        `(${(readErr as Error).message}). No credentials were issued.`,
+    );
+  }
+
+  // Refuse; do not repair. Deleting the impostor and recreating is racy against an
+  // attacker who can simply create it again — so the "fixed" path could still vend
+  // against a hostile document — and if a collision is ever innocent, silently
+  // destroying a customer's IAM policy is worse than stopping.
+  if (!existing || !policyDocumentsMatch(existing, doc)) {
+    throw new Error(
+      `refusing to vend credentials: the IAM policy ${name} already exists but does not contain the scope ` +
+        `AgentsPoppy compiled. AgentsPoppy never binds a session to a policy document it did not write. ` +
+        `Inspect ${arn} and remove it if it is not yours. No credentials were issued.`,
+    );
   }
   return arn;
 }

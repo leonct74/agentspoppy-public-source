@@ -12,6 +12,7 @@ const NOTES: ReleaseNote[] = [
   { version: "0.3.5", date: "2026-08-24", summary: "Confined by default.", changes: ["Poppies are confined."] },
   { version: "0.3.4", date: "2026-08-22", summary: "Windows update fix.", changes: ["Updates no longer fail."] },
   { version: "0.3.3", date: "2026-08-12", summary: "Setup wizard.", changes: ["Guided AWS setup."] },
+  { version: "0.3.2", date: "2026-08-11", summary: "Policy link fix.", changes: ["The link works."] },
 ];
 
 function mount(opts: { version?: string | null; seen?: string | null; notes?: ReleaseNote[] } = {}) {
@@ -34,13 +35,38 @@ describe("WhatsNew", () => {
     expect(screen.getByText("Confined by default.")).toBeTruthy();
   });
 
-  // Someone the Store moved across several versions should read all of them.
-  it("shows every version the user skipped", async () => {
+  // Someone the Store moved across several versions should read all of them — and the
+  // ones they skipped are marked, so "what am I accepting?" is still answerable at a
+  // glance within the full list.
+  it("marks the versions the user skipped as new", async () => {
+    mount({ version: "0.3.5", seen: "0.3.3" });
+    await screen.findByRole("dialog");
+    expect(screen.getAllByText("New").length).toBe(2); // 0.3.5 and 0.3.4, not 0.3.3
+  });
+
+  // The history is the point: showing only what changed answers one question and then
+  // vanishes, leaving no way to look back at what a version did.
+  it("lists every release, not just the unseen ones", async () => {
     mount({ version: "0.3.5", seen: "0.3.3" });
     await screen.findByRole("dialog");
     expect(screen.getByText("Confined by default.")).toBeTruthy();
     expect(screen.getByText("Windows update fix.")).toBeTruthy();
-    expect(screen.queryByText("Setup wizard.")).toBeNull();
+    expect(screen.getByText("Setup wizard.")).toBeTruthy();
+  });
+
+  it("still shows the whole history when nothing is new", async () => {
+    mount({ version: "0.3.5", seen: "0.3.5" });
+    fireEvent.click(await screen.findByRole("button", { name: /AgentsPoppy 0\.3\.5/ }));
+    await screen.findByRole("dialog");
+    expect(screen.getByText("Setup wizard.")).toBeTruthy();
+    expect(screen.getByText("Policy link fix.")).toBeTruthy();
+    expect(screen.queryByText("New")).toBeNull();
+  });
+
+  it("marks which release you are running", async () => {
+    mount({ version: "0.3.4", seen: "0.3.4" });
+    fireEvent.click(await screen.findByRole("button", { name: /AgentsPoppy 0\.3\.4/ }));
+    expect(await screen.findByText("You have this")).toBeTruthy();
   });
 
   it("stays shut when the version has not changed", async () => {
@@ -69,13 +95,14 @@ describe("WhatsNew", () => {
     expect(writeSeen).toHaveBeenCalledWith("0.3.5");
   });
 
-  // A feed that is missing, empty or has no entry for this version must degrade to a
-  // sentence — never an error, and never a blank box.
-  it("says so plainly when there are no notes for this version", async () => {
+  // A version the feed has never heard of still gets the history — it is useful on its
+  // own — but nothing is claimed about the version being run.
+  it("shows the history for a version with no entry of its own", async () => {
     mount({ version: "9.9.9", seen: "0.3.3", notes: NOTES });
-    const button = await screen.findByRole("button", { name: /AgentsPoppy 9\.9\.9/ });
-    fireEvent.click(button);
-    expect(await screen.findByText(/no notes for this version/i)).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: /AgentsPoppy 9\.9\.9/ }));
+    await screen.findByRole("dialog");
+    expect(screen.getByText("Confined by default.")).toBeTruthy();
+    expect(screen.queryByText("You have this")).toBeNull();
   });
 
   it("survives an empty feed", async () => {

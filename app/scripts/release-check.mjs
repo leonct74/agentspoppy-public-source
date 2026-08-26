@@ -179,8 +179,19 @@ const shippedLinks = [...new Set((viewSrc.match(/https:\/\/[^"'`\s)]+/g) ?? []))
 );
 const brokenLinks = [];
 for (const url of shippedLinks) {
-  const out = sh("curl", ["-sIL", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "20", url]);
-  if (!/^(200|301|302)/.test(out.trim())) brokenLinks.push(`${url} → ${out.trim()}`);
+  const head = sh("curl", ["-sIL", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "20", url]).trim();
+  if (/^(200|301|302)/.test(head)) continue;
+  // A HEAD refusal is not proof a link is broken. apps.microsoft.com answers 403 to HEAD
+  // from any client, browser user-agent included, while a real GET returns the product
+  // page — so the first version of this gate failed a link that works perfectly for every
+  // user. Confirm with a GET before calling it broken: a genuinely dead link (the 404 that
+  // stranded users mid-setup in v0.3.2, which is why this gate exists) fails both.
+  const get = sh("curl", [
+    "-sL", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "25",
+    "-A", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
+    url,
+  ]).trim();
+  if (!/^(200|301|302)/.test(get)) brokenLinks.push(`${url} → HEAD ${head}, GET ${get}`);
 }
 gate(
   "links: every shipped user-facing URL resolves anonymously",

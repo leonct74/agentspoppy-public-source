@@ -299,6 +299,14 @@ a { color: var(--crimson); }
 .whats-new__release + .whats-new__release { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
 .whats-new__release h3 { margin: 0 0 2px; font-size: 13px; display: flex; align-items: baseline; gap: 8px; }
 .whats-new__date { color: var(--muted); font-weight: 400; font-size: 12px; }
+.whats-new__badge {
+  font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+  padding: 2px 6px; border-radius: 3px; background: var(--primary); color: var(--on-clay);
+}
+.whats-new__badge.is-current { background: var(--surface-3); color: var(--muted-2); }
+/* The releases this user has not read yet: brought forward, not shouted at. */
+.whats-new__release.is-new .whats-new__summary { color: var(--text); }
+.whats-new__release:not(.is-new) .whats-new__summary { color: var(--muted-2); }
 .whats-new__summary { margin: 0 0 8px; font-size: 14px; }
 .whats-new ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
 .whats-new li { font-size: 13px; color: var(--muted-2); }

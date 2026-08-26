@@ -564,3 +564,75 @@ describe("ConnectionDetailView — live indicator", () => {
     expect(screen.queryByText("Live")).toBeNull();
   });
 });
+
+// A launch-class grant (ec2:RunInstances) is rated HIGH because the compiler cannot tag
+// such a resource at birth, so teardown will never find it. The card sitting next to that
+// badge must not simultaneously reassure the user with the additive wording — a red badge
+// beside "Create only / New resources it creates (not existing ones)" is the rating and
+// the UI contradicting each other on the same card. See docs/specs/scope-policy-and-rating.md.
+describe("ConnectionDetailView — a launch grant is not described as a harmless create", () => {
+  const launchSet: PermissionSet = {
+    id: "p", name: "P", description: "",
+    grants: [{ service: "ec2", actions: ["RunInstances", "CreateSecurityGroup"], resourceScope: "*" }],
+    requiredTags: ["agentspoppy:account", "agentspoppy:app", "agentspoppy:connection"],
+    limits: null,
+  };
+
+  it("labels it as starting things up, not as 'Create only'", () => {
+    renderDetail(launchSet);
+    expect(screen.getByText("Start up new")).toBeTruthy();
+    expect(screen.queryByText("Create only")).toBeNull();
+  });
+
+  it("does not tell the user it is limited to resources it creates", () => {
+    renderDetail(launchSet);
+    expect(screen.queryByText(/New resources it creates \(not existing ones\)/)).toBeNull();
+    expect(screen.getByText(/untagged, so not tracked/)).toBeTruthy();
+  });
+
+  it("still uses the plain additive wording for a genuine create-only grant", () => {
+    renderDetail({
+      ...launchSet,
+      grants: [{ service: "cognito-idp", actions: ["CreateUserPool"], resourceScope: "*" }],
+    });
+    expect(screen.getByText("Create only")).toBeTruthy();
+    expect(screen.getByText(/New resources it creates \(not existing ones\)/)).toBeTruthy();
+  });
+});
+
+// From the adversarial review of the fault C/E fix: a grant can be confined to its own
+// NAMES and still rate high, because creating an IAM role is creating a new holder of
+// power in the account whatever it is called. Before this, such a grant fell through to
+// the green "Its own" badge — AgentsPoppy's most reassuring badge, on precisely the
+// grant the rating had just been fixed to take seriously — and was filtered out of the
+// risk list because that list only looked at unscoped grants.
+describe("ConnectionDetailView — a scoped grant can still be serious", () => {
+  const iamSet: PermissionSet = {
+    id: "p", name: "P", description: "",
+    grants: [{ service: "iam", actions: ["CreateRole", "PassRole"], resourceScope: "arn:aws:iam::*:role/App-*" }],
+    requiredTags: ["agentspoppy:account", "agentspoppy:app", "agentspoppy:connection"],
+    limits: null,
+  };
+
+  it("does not show the green badge on a control-plane grant", () => {
+    renderDetail(iamSet);
+    expect(screen.getByText("Its own — permissions")).toBeTruthy();
+  });
+
+  it("lists it under the risks, not only as a badge", () => {
+    renderDetail(iamSet);
+    expect(screen.getByText(/IAM — controls who can do what in your account/)).toBeTruthy();
+  });
+
+  // The contradiction: a red Unscoped badge with "Resources matching <pattern>" printed
+  // underneath it, where that pattern in fact matches every hosted zone in the account.
+  it("never describes an unscoped grant with a phrase that reads as a constraint", () => {
+    renderDetail({
+      ...iamSet,
+      grants: [{ service: "route53", actions: ["ChangeResourceRecordSets"], resourceScope: "arn:aws:route53:::hostedzone/*" }],
+    });
+    expect(screen.queryByText(/^Resources matching/)).toBeNull();
+    expect(screen.getByText(/matches all of them/)).toBeTruthy();
+  });
+});
+

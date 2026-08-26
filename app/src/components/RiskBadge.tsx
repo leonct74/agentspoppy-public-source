@@ -12,7 +12,15 @@ import { Icon } from "./Icon";
  */
 export function RiskBadge({ level, scoped }: { level: RiskLevel; scoped: boolean }) {
   if (scoped) {
-    // Confined to its own resources — amber if it can change them, green if read-only.
+    // Confined to its own resources — but "confined" is not the same as "harmless".
+    // A grant on the control plane (iam / organizations / account) rates high even
+    // when its name pattern is tight, because creating an identity is creating a new
+    // holder of power in the account whatever it is called. Falling through to the
+    // green badge here would have shown AgentsPoppy's MOST reassuring badge on
+    // precisely the grant the rating had just been fixed to take seriously.
+    if (level === "high") {
+      return <span className="risk-badge risk-high">Its own — permissions</span>;
+    }
     const cls = level === "medium" ? "risk-medium" : "risk-ok";
     return (
       <span className={`risk-badge ${cls}`}>

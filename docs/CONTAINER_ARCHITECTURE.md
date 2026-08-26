@@ -138,8 +138,22 @@ short-lived, tag-scoped STS session — it simply arrives by injection instead o
 - **Broker guardrails unchanged** — the deny set on the broker role (IAM-user management,
   account/org control, CloudTrail tampering, attaching admin policies) still bounds every vend.
 - **Scope-policy ownership.** For large scopes that exceed STS's 2048-char inline limit, the
-  per-connection customer-managed policy (`AgentsPoppyScope-<connId>`) is created and cleaned up by
-  the host as part of connection lifecycle — eliminating the orphaned-policy failure from §1.
+  per-connection customer-managed policy (`AgentsPoppyScope-<connId>-<hash>`) is created by the
+  host, with the broker session's own credentials, so the operator needs no IAM permission of its
+  own — eliminating the vend failure from §1.
+  **Correction (2026-08-25): these policies are NOT cleaned up.** This paragraph previously said
+  they were created and cleaned up as part of connection lifecycle; nothing in the source has ever
+  deleted one. They are untagged, unledgered, and a new one is minted on every scope change, against
+  an account cap of 1,500 customer-managed policies. Tracked as a follow-up, not yet fixed.
+  **The name is not a secret (2026-08-26).** It is content-addressed —
+  `AgentsPoppyScope-<connId>-<sha256 prefix>` — and a poppy knows every input to it in advance: the
+  host hands a backend its own connection id at start, and the document compiles deterministically
+  from the poppy's own manifest. The broker therefore no longer trusts a policy because of its name.
+  If one already occupies the name, it reads the **default version** back and refuses to vend at all
+  unless the document is the one it compiled — including when the read itself fails, since an
+  unverifiable policy is indistinguishable from a hostile one. It never deletes or overwrites: that
+  is racy against an attacker, and destroying a customer's IAM policy on a false positive is worse
+  than stopping. See `docs/SECURITY_MECHANISM.md` §7 (2026-08-26).
 - **Caller authentication (broker HTTP API).** Loopback is **not** an access-control boundary — a
   poppy backend is a local process too — so the broker authenticates every caller by bearer token.
   A per-run **host token** (`generateToken()` in `packages/broker/src/auth.ts`) is emitted once on

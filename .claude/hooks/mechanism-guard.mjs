@@ -23,6 +23,13 @@ const PROTECTED = [
   "packages/broker/src/aws/tagging.ts",
   "packages/broker/src/aws/deletion.ts",
   "packages/core/src/permissions.ts",
+  // The rating's tripwires. Same reasoning as policy.test.ts above: an agent told to
+  // "make the failing test pass" can satisfy that instruction by deleting the row that
+  // failed, and the next change to permissions.ts is then approved against a tripwire
+  // that no longer trips. These two pin I6 — that the consent screen describes what the
+  // compiled policy actually permits — so weakening them IS a mechanism change.
+  "packages/core/src/permissions-rating.test.ts",
+  "packages/broker/src/aws/rating-matches-compiler.test.ts",
   "packages/broker/src/certify.ts",
   "scripts/certify.ts",
   "docs/SECURITY_MECHANISM.md", // the spec itself — rewriting the law is changing the mechanism

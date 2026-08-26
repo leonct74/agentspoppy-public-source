@@ -61,7 +61,31 @@ approval time must match what the compiled session policy actually permits. Crea
 rated "additive, cannot harm what exists" — and I3 makes the compiled policy exactly
 that. Any change that lets rating semantics and policy semantics diverge is a
 mechanism-integrity bug, even if both sides are individually "safe".
-*Pinned by:* `permissions.ts` (`assessGrant`) + this document's §5 checklist.
+
+Divergence is a bug in **both** directions *(clarified 2026-08-26)*. Under-stating a
+grant is the obvious failure — `ec2:TerminateInstances` was once described as *"Can read
+ANY EC2 resource in your account"*. Over-stating one is the same bug with the sign
+flipped: telling a user that `ec2:RunInstances` can *"create, change and delete ANY EC2
+resource"* claims a power the compiled policy does not grant, and a rating that accuses
+everything is no more informative than one that accuses nothing.
+
+The additive bucket is the sharpest edge. Its promise — *"can create new things, but
+cannot change or delete anything that already exists"* — is true on its own terms for any
+scope. What is borrowed from I3 is the stronger guarantee sitting behind it under a
+`tagged-as-self` grant: that the created thing is born carrying the app's tag and is
+therefore sweepable. (Under a wildcard scope there is no birth-tag at all, which is why
+`isFullyAttributable` refuses a wildcard mutating grant outright — a different guardrail
+for the same worry.) The bucket is only safe to widen while the compiler birth-tags
+exactly the actions the rating calls additive.
+The rating's `CREATE_VERBS` therefore mirrors the compiler's `/:(Create|Request)/` filter
+by construction, and an action that is a "create" in English but not to the compiler —
+`ec2:RunInstances` — gets its own **`launch`** class rather than the additive
+reassurance, because under a `tagged-as-self` grant it is born UNTAGGED and so escapes
+I4's sweep and teardown.
+*Pinned by:* `permissions.ts` (`assessGrant`), `permissions-rating.test.ts` (a table of
+real AWS action names asserted against what they actually do),
+`aws/rating-matches-compiler.test.ts` (fails if the additive bucket ever outruns the
+compiler's birth-tagging), + this document's §5 checklist.
 
 ## 3. The create/mutate split, precisely
 
@@ -80,12 +104,21 @@ The verb filter is load-bearing: `Put*`/`Update*`/`Delete*` can overwrite or des
 *existing* resources and must never migrate to the create side. Widening that regex is a
 mechanism change and requires updating this document (§5).
 
+It is load-bearing a second time, through I6. The consent rating's additive bucket tells
+the user an action "cannot change or delete anything that already exists", which is only
+true because this filter birth-tags it. The two sets live in different packages
+(`policy.ts` here, `CREATE_VERBS` in `core/permissions.ts`) and nothing in the type system
+links them, so `aws/rating-matches-compiler.test.ts` asserts the one direction that must
+hold: **the rating may be stricter than this filter, never more generous.** Widening the
+regex therefore also permits widening the rating; narrowing it obliges narrowing the
+rating in the same commit.
+
 ## 4. Enforcement points (the files a patch must respect)
 
 | File | Role |
 |---|---|
 | `packages/broker/src/aws/policy.ts` | Compiles grants → session policy. **The mechanism's heart.** |
-| `packages/broker/src/aws/sts.ts` | Assumes the role with that policy + transitive attribution session tags. |
+| `packages/broker/src/aws/sts.ts` | Assumes the role with that policy + transitive attribution session tags. Also **verifies the managed scope policy's contents** before binding a session to it (large scopes are referenced by ARN, and an ARN is only a name). |
 | `packages/core/src/permissions.ts` | `assessPermissionSet` — the rating shown at approval (I6's other half). |
 | `packages/broker/src/aws/tagging.ts`, `deletion.ts` | The tag sweep + typed deletion behind teardown (I4). |
 | `scripts/certify.ts`, `packages/broker/src/certify.ts` | The leaves-no-trace proof harness (I4's audit). |
@@ -263,6 +296,35 @@ reader catching the trick. Authority for the one exemption sits on the listing
 gated at all.
 
 ## 7. Change history
+
+- **2026-08-26** — faults C and E from the 16 August adversarial review closed
+  (`docs/specs/scope-policy-and-rating.md`).
+  **C:** `ensureScopePolicyDoc` reused a managed scope policy whenever one already
+  occupied the content-addressed name, without reading it. Every input to that name is
+  known to a poppy in advance, so a poppy holding `iam:CreatePolicy` could plant
+  `Allow *:*` there and have its own next vend bound to a document it wrote. The broker
+  now reads the policy's **default version** (a `CreatePolicyVersion`+`SetAsDefault` swap
+  leaves the policy object intact, so checking mere existence would miss it), compares it
+  semantically, and **refuses the vend** on any mismatch — including when the read itself
+  fails, because unverifiable is not distinguishable from hostile. It never repairs:
+  deleting an impostor is racy, and destroying a customer's IAM policy on a false positive
+  is worse than stopping. Needs no new IAM permission — `iam:GetPolicy`/`GetPolicyVersion`
+  fall outside all four broker-role denies — so it reaches every account on app update
+  with no re-apply. A narrow time-of-check race remains, closed by the fifth deny
+  guardrail shipping with fault F.
+  **E (this is the I6 half):** the rating classified actions by an UNANCHORED substring
+  search, so `ec2:TerminateInstances` rated as a read and `ec2:GetConsoleOutput` rated
+  destructive on the "put" inside "Output"; and any scope that was not literally `"*"`
+  counted as confined, so `arn:aws:iam::*:role/*` was described as *"cannot touch any IAM
+  resource with a different name"* and passed `isFullyAttributable`. Now: anchored verb
+  classes, explicit dangerous/secret-read action sets, unknown verbs defaulting to
+  mutating, the new `launch` class, `scopeIsUnbounded()`, and `CONTROL_PLANE` consulted
+  for every grant rather than only wildcard ones. Ratings get **stricter**: no grant is
+  refused that was allowed before and no compiled policy changes, but
+  `hasUnscopedGrants` seeds `supervised` for NEW connections, so CrewPoppy and
+  TrafficPoppy now start supervised. `aws/sts.ts`, `core/permissions.ts`, and the
+  connection-detail labels, which would otherwise have shown "Create only" beside a red
+  badge on the same card.
 
 - **2026-08-20** — §6.1's filesystem channel CLOSED fleet-wide. Every listed first-party
   poppy with a backend runs `isolation: "strict"` in production (per-poppy record:

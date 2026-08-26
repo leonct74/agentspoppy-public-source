@@ -7,7 +7,7 @@
  * and relaunching happen on an explicit click, never automatically. Dismiss
  * hides that version for the rest of the session (it returns next launch).
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { checkForSelfUpdate, type AvailableUpdate } from "../lib/selfUpdate";
 import { isWindows } from "../lib/whatsNew";
 import { Icon } from "./Icon";
@@ -47,16 +47,36 @@ export function UpdateBanner({
   const [update, setUpdate] = useState<AvailableUpdate | null>(null);
   const [dismissed, setDismissed] = useState(false);
   const [phase, setPhase] = useState<Phase>("idle");
+  // Read inside the polling closure, which is created once and must not capture a stale
+  // phase — otherwise a re-check could swap the update out mid-download.
+  const phaseRef = useRef<Phase>("idle");
+  useEffect(() => {
+    phaseRef.current = phase;
+  }, [phase]);
   const [pct, setPct] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    void check().then((u) => {
-      if (!cancelled && u) setUpdate(u);
-    });
+    const look = () => {
+      // Never interrupt an install in progress by replacing the update under it.
+      if (cancelled || phaseRef.current !== "idle") return;
+      void check().then((u) => {
+        if (!cancelled && u) setUpdate(u);
+      });
+    };
+    look();
+    // Checking only at startup means an app left open never learns an update exists —
+    // and it is the security releases where that matters most. Someone who does not quit
+    // AgentsPoppy for a fortnight sat on the old version with everything looking healthy.
+    // So: every six hours, and whenever the window is brought back to the front, which is
+    // when a person is actually there to read the banner.
+    const timer = setInterval(look, 6 * 60 * 60 * 1000);
+    window.addEventListener("focus", look);
     return () => {
       cancelled = true;
+      clearInterval(timer);
+      window.removeEventListener("focus", look);
     };
   }, [check]);
 

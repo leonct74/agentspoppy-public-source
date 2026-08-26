@@ -3,7 +3,15 @@
 
 import { useState } from "react";
 import type { AuditEntry, Connection, InfraGraph, Inventory, ResidualResource } from "@agentspoppy/core";
-import { assessPermissionSet, awsConsoleUrl, grantCanDestroy, grantCanMutate, groupByService, ledgerConsoleUrl } from "@agentspoppy/core";
+import {
+  assessPermissionSet,
+  awsConsoleUrl,
+  grantCanDestroy,
+  grantCanLaunchUntracked,
+  grantCanMutate,
+  groupByService,
+  ledgerConsoleUrl,
+} from "@agentspoppy/core";
 import { InfraMap } from "../components/InfraMap";
 import { PoppySpinner } from "../components/PoppySpinner";
 import { serviceColor, summarizeFootprint } from "../lib/infraLayout";
@@ -181,12 +189,19 @@ export function ConnectionDetailView(props: ConnectionDetailViewProps) {
     service?: string;
   }[] = [
     ...risk.grants
-      .filter(({ risk: gr }) => !gr.scoped && gr.level !== "low")
+      // `!gr.scoped` alone hid the control-plane case: a grant can be confined to its
+      // own names AND still rate high, and that is exactly the grant a user most needs
+      // to see listed here rather than only as a badge on a card.
+      .filter(({ risk: gr }) => (!gr.scoped || gr.level === "high") && gr.level !== "low")
       .map(({ grant, risk: gr }) => ({
         level: gr.level as "high" | "medium",
         title:
           gr.level === "high"
-            ? `${grant.service.toUpperCase()} — can change resources beyond its own`
+            ? gr.scoped
+              ? `${grant.service.toUpperCase()} — controls who can do what in your account`
+              : grantCanLaunchUntracked(grant) && !grantCanDestroy(grant)
+                ? `${grant.service.toUpperCase()} — can start up resources AgentsPoppy cannot track`
+                : `${grant.service.toUpperCase()} — can change resources beyond its own`
             : grantCanMutate(grant)
               ? `${grant.service.toUpperCase()} — can create new resources in your account`
               : `${grant.service.toUpperCase()} — can read resources beyond its own`,
@@ -721,15 +736,21 @@ export function ConnectionDetailView(props: ConnectionDetailViewProps) {
       <h3>What it can do</h3>
       <div className="cap-grid">
         {risk.grants.map(({ grant, risk: gr }, i) => {
+          // Never describe an UNSCOPED grant with a phrase that reads as a constraint.
+          // "Resources matching arn:aws:route53:::hostedzone/*" sat directly under a red
+          // Unscoped badge and told the user the opposite of what the badge said — and
+          // that pattern really does match every hosted zone in the account.
           const where = gr.scoped
             ? grant.resourceScope === "tagged-as-self"
               ? "Only its own (tagged) resources"
               : `Only its own resources (${grant.resourceScope})`
-            : grant.resourceScope === "*" || grant.resourceScope.length === 0
-              ? grantCanMutate(grant) && !grantCanDestroy(grant)
+            : grantCanLaunchUntracked(grant)
+              ? "New resources anywhere in your account — untagged, so not tracked"
+              : grantCanMutate(grant) && !grantCanDestroy(grant)
                 ? "New resources it creates (not existing ones)"
-                : "Any resource in your account"
-              : `Resources matching ${grant.resourceScope}`;
+                : grant.resourceScope === "*" || grant.resourceScope.length === 0
+                  ? "Any resource in your account"
+                  : `Any resource in your account — ${grant.resourceScope} matches all of them`;
           return (
             <div key={i} className="cap-card">
               <div className="cap-card-head">
@@ -737,7 +758,13 @@ export function ConnectionDetailView(props: ConnectionDetailViewProps) {
                 <RiskBadge level={gr.level} scoped={gr.scoped} />
               </div>
               <div className="cap-verb">
-                {grantCanDestroy(grant) ? "Create, change & delete" : grantCanMutate(grant) ? "Create only" : "Read-only"}
+                {grantCanDestroy(grant)
+                  ? "Create, change & delete"
+                  : grantCanLaunchUntracked(grant)
+                    ? "Start up new"
+                    : grantCanMutate(grant)
+                      ? "Create only"
+                      : "Read-only"}
               </div>
               <p className="cap-where muted">{where}</p>
             </div>

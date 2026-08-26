@@ -202,7 +202,7 @@ describe("DirectoryView", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /Verify this poppy with your AI agent/ }));
     await waitFor(() => expect(writeText).toHaveBeenCalled());
-    const prompt = writeText.mock.calls[0][0] as string;
+    const prompt = writeText.mock.calls[0]![0] as string;
     expect(prompt).toContain("FIRST time");
     expect(prompt).toContain("CHECK FILESYSTEM CONFINEMENT");
     expect(await screen.findByText(/Prompt copied/)).toBeTruthy();
