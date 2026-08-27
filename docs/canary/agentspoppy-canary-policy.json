@@ -4,7 +4,10 @@
     {
       "Sid": "ScopeDownSelfToTestThePoppyPolicy",
       "Effect": "Allow",
-      "Action": ["sts:GetFederationToken", "sts:GetCallerIdentity"],
+      "Action": [
+        "sts:GetFederationToken",
+        "sts:GetCallerIdentity"
+      ],
       "Resource": "*"
     },
     {
@@ -20,7 +23,11 @@
         "ec2:DeleteTags"
       ],
       "Resource": "*",
-      "Condition": { "StringEquals": { "aws:RequestedRegion": "eu-west-1" } }
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "eu-west-1"
+        }
+      }
     },
     {
       "Sid": "CognitoCanaryDeliberatelyBroadSoDenialsAreAttributable",
@@ -35,13 +42,38 @@
         "cognito-idp:ListTagsForResource"
       ],
       "Resource": "*",
-      "Condition": { "StringEquals": { "aws:RequestedRegion": "eu-west-1" } }
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "eu-west-1"
+        }
+      }
     },
     {
       "Sid": "OptionalTier1Simulation",
       "Effect": "Allow",
-      "Action": ["iam:SimulateCustomPolicy", "iam:GetContextKeysForCustomPolicy"],
+      "Action": [
+        "iam:SimulateCustomPolicy",
+        "iam:GetContextKeysForCustomPolicy"
+      ],
       "Resource": "*"
+    },
+    {
+      "Sid": "AmplifyCanary",
+      "Effect": "Allow",
+      "Action": [
+        "amplify:CreateApp",
+        "amplify:DeleteApp",
+        "amplify:GetApp",
+        "amplify:ListApps",
+        "amplify:TagResource",
+        "amplify:ListTagsForResource"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "eu-west-1"
+        }
+      }
     },
     {
       "Sid": "NeverTouchAnythingThatIsNotTheCanary",

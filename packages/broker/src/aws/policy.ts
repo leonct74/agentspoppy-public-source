@@ -113,13 +113,18 @@ const TAG_WRITE_RULES: Record<string, TagWriteRules> = {
   // pool, which the same run confirmed was possible. Dropping it closes that gap at no
   // cost. See docs/specs/tag-adoption-canary.md.
   "cognito-idp": { add: ["TagResource"], remove: ["UntagResource"], claim: "none" },
-  // NOT yet proven, so left on the weaker shape deliberately. The AWS global condition-key
-  // reference implies the same behaviour ("…or in requests that create a resource with an
-  // attached tag"), and if it holds these become `none` too — but "implies" is exactly what
-  // the canary was built to stop trusting, and being wrong here means MailPoppy or
-  // HostingPoppy stops deploying. Each needs its own canary run before it moves.
+  // NOT proven, so left on the weaker shape deliberately. Testing guardduty means creating
+  // a detector, which ENABLES GuardDuty on the account — a paid service and a change to the
+  // user's security posture, not something to switch on for a test. The shape below works
+  // and blocks the attack; it only keeps the residual, and an untagged GuardDuty resource
+  // is unlikely to exist since they are made by tooling, not by hand.
   guardduty: { add: ["TagResource"], remove: ["UntagResource"], claim: "request-tag" },
-  amplify: { add: ["TagResource"], remove: ["UntagResource"], claim: "request-tag" },
+  // PROVEN live (canary, 26 Aug 2026), BOTH halves — which is the only kind of proof that
+  // counts here. Creating an app with its own tag succeeded under a policy carrying no
+  // claim statement; and claiming an UNTAGGED app it did not create was DENIED without the
+  // statement and ALLOWED with it, with the app's real tags confirming both. So the
+  // statement was not authorising creates, only enabling the takeover.
+  amplify: { add: ["TagResource"], remove: ["UntagResource"], claim: "none" },
 };
 
 /** Bare action name, without the optional `service:` prefix. */
