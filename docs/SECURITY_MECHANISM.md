@@ -319,11 +319,14 @@ gated at all.
   `aws:ResourceTag` with the SUBMITTED tags during a tag-on-create, so for Cognito the
   claim-if-unclaimed statement never authorised a single create. Its only effect was to
   permit claiming an UNTAGGED resource, which the same run confirmed worked. Removed:
-  Cognito now has **no residual gap**, matching EC2. Amplify was proven the same way later
-  the same day and moved too — both halves tested, including that claiming an untagged app
-  is DENIED without the statement and was ALLOWED with it. GuardDuty keeps the weaker shape:
-  testing it would mean enabling a paid service on the user's account. `aws/policy.ts`,
-  `docs/specs/tag-adoption-canary.md`.
+  Amplify and GuardDuty were proven the same way later the same day and moved too, so
+  **all four services now have no residual gap**. GuardDuty needed a detector enabled
+  briefly (founder-authorised, deleted immediately, account verified back to none, and
+  MailPoppy's separate malware-protection plan confirmed untouched — the two are different
+  GuardDuty features, and conflating them nearly caused this run to be skipped on a false
+  premise). The weaker `request-tag` shape stays in the compiler as the place a
+  newly-added service sits until it has had the same run; nothing uses it today.
+  `aws/policy.ts`, `docs/specs/tag-adoption-canary.md`.
 - **2026-08-26** — tag adoption closed in the compiler (`docs/specs/tag-adoption.md`).
   I2 says an app may touch only what carries its own tag; six of seven shipped poppies
   could also WRITE that tag on every resource of some type, so the guarantee was

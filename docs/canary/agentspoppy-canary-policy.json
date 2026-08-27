@@ -76,6 +76,40 @@
       }
     },
     {
+      "Sid": "GuardDutyCanary",
+      "Effect": "Allow",
+      "Action": [
+        "guardduty:ListDetectors",
+        "guardduty:GetDetector",
+        "guardduty:CreateDetector",
+        "guardduty:DeleteDetector",
+        "guardduty:CreateFilter",
+        "guardduty:DeleteFilter",
+        "guardduty:GetFilter",
+        "guardduty:ListFilters",
+        "guardduty:TagResource",
+        "guardduty:UntagResource",
+        "guardduty:ListTagsForResource"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "eu-west-1"
+        }
+      }
+    },
+    {
+      "Sid": "GuardDutyServiceLinkedRole",
+      "Effect": "Allow",
+      "Action": "iam:CreateServiceLinkedRole",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "iam:AWSServiceName": "guardduty.amazonaws.com"
+        }
+      }
+    },
+    {
       "Sid": "NeverTouchAnythingThatIsNotTheCanary",
       "Effect": "Deny",
       "Action": [

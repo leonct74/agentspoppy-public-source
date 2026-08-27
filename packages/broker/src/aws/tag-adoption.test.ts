@@ -52,19 +52,20 @@ describe("a tag write on an unnarrowed scope is conditioned, not blanket", () =>
     expect(byId(cognitoUnbounded, "TagOwn")).toBeDefined();
   });
 
-  // …but a service that has NOT been proven keeps the weaker shape, because being wrong
-  // there means a real deploy stops working. guardduty and amplify are deliberately here.
-  it("still emits the claim statement for a service not yet proven", () => {
-    const gd: PermissionGrant = {
-      service: "guardduty",
-      actions: ["CreateMalwareProtectionPlan", "TagResource"],
-      resourceScope: "*",
-    };
-    const claim = stmts(gd).find((s) => s.Sid === "Grant0TagOnCreate")!;
-    expect(claim.Condition).toEqual({
-      StringEquals: { "aws:RequestTag/agentspoppy:app": APP },
-      Null: { "aws:ResourceTag/agentspoppy:app": "true" },
-    });
+  // Every service in the table has now been proven live, so NONE of them emits a claim
+  // statement any more. If a future service is added on the unproven `request-tag` shape,
+  // this is the test that should be extended rather than deleted — the shape still exists
+  // in the compiler precisely so an unproven service has somewhere safe to sit.
+  it("emits no claim statement for any service currently in the table", () => {
+    for (const [service, actions] of [
+      ["cognito-idp", ["CreateUserPool", "TagResource"]],
+      ["guardduty", ["CreateMalwareProtectionPlan", "TagResource"]],
+      ["amplify", ["CreateApp", "TagResource"]],
+    ] as [string, string[]][]) {
+      const out = stmts({ service, actions, resourceScope: "*" });
+      expect(out.find((s) => s.Sid === "Grant0TagOnCreate"), service).toBeUndefined();
+      expect(out.find((s) => s.Sid === "Grant0TagOwn"), service).toBeDefined();
+    }
   });
 
   // THE REGRESSION THAT WOULD BREAK EVERY RELEASE. CloudFormation issues tag updates as
