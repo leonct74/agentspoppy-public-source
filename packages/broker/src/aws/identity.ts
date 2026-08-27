@@ -13,12 +13,15 @@
  * offline.
  */
 import { operatorCredentials, writeAgentsPoppyProfile, type AwsKeyInput } from "./credentials";
+import { TEMPLATE_VERSION } from "./role-template";
 import {
+  readSetupStack,
   runBootstrap,
   sdkBootstrapGateway,
   type BootstrapInput,
   type BootstrapResult,
 } from "./bootstrap";
+import { setupVersionStatus, type SetupVersionStatus } from "./setup-version";
 
 export interface CallerIdentity {
   accountId: string;
@@ -39,6 +42,12 @@ export interface AwsBootstrap {
    * / resumable — see {@link runBootstrap}.
    */
   deployBootstrap(input: BootstrapInput): Promise<BootstrapResult>;
+  /**
+   * Is the setup deployed in the user's account the one this host expects? The guardrails
+   * live in THEIR AWS, so a tightened one changes nothing until they re-apply — and nothing
+   * else tells them to. Read-only; needs no permission the operator doesn't already hold.
+   */
+  readSetupVersion(region?: string): Promise<SetupVersionStatus>;
 }
 
 function regionOrDefault(region?: string): string {
@@ -59,6 +68,11 @@ export function sdkAwsBootstrap(): AwsBootstrap {
 
     async deployBootstrap(input) {
       return runBootstrap(sdkBootstrapGateway(input.region, input.setup), input);
+    },
+
+    async readSetupVersion(region) {
+      const r = regionOrDefault(region);
+      return setupVersionStatus(await readSetupStack(sdkBootstrapGateway(r), r));
     },
 
     async getCallerIdentity(region) {
@@ -124,6 +138,11 @@ export class StubAwsBootstrap implements AwsBootstrap {
   }
   async verifyRole(roleArn: string): Promise<RoleProbeResult> {
     return { ok: true, assumedArn: `${roleArn}/agentspoppy-verify` };
+  }
+  async readSetupVersion(): Promise<SetupVersionStatus> {
+    // Demo/test: the simulated setup is always the one this build ships, so the demo
+    // never shows a staleness banner it can't act on.
+    return setupVersionStatus({ ok: true, outputs: { TemplateVersion: String(TEMPLATE_VERSION) } });
   }
   async writeOperatorCredentials(): Promise<void> {
     // Demo/test: don't touch ~/.aws. Simulate a successful save so the next

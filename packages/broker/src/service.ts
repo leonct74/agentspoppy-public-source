@@ -26,7 +26,15 @@ import type {
 } from "@agentspoppy/core";
 import type { Store } from "./store";
 import type { ActivityProvider, CloudProvider, CredentialVendor, ScopedCredentials } from "./providers";
-import { AccountUnreadableError, DEFAULT_OPERATOR_NAME, DEFAULT_ROLE_NAME, consoleUrlForArn, roleTemplateJson } from "./aws";
+import {
+  AccountUnreadableError,
+  DEFAULT_OPERATOR_NAME,
+  DEFAULT_ROLE_NAME,
+  TEMPLATE_VERSION,
+  consoleUrlForArn,
+  roleTemplateJson,
+  type SetupVersionStatus,
+} from "./aws";
 import type { AwsBootstrap, AwsKeyInput, CallerIdentity, RoleProbeResult } from "./aws";
 
 /** Recent account activity, attributed, with the headline counts. */
@@ -145,6 +153,35 @@ export class BrokerService {
     return this.aws.getCallerIdentity();
   }
 
+  /**
+   * Is the broker role deployed in the user's account the one this host expects?
+   *
+   * The guardrails that protect an account are written into the user's OWN AWS by the
+   * bootstrap stack, so shipping a tightened guardrail changes nothing until that user
+   * re-applies setup. Nothing else tells them to (docs/specs/broker-role-v2.md).
+   *
+   * Read-only, and deliberately never throws: a staleness check that fails must not break
+   * the screen it sits on. An unreadable answer surfaces as `unknown`, which prompts the
+   * same as out-of-date but SAYS "couldn't check" — crying wolf is how a security banner
+   * gets trained out of a user.
+   */
+  async getSetupStatus(): Promise<SetupVersionStatus> {
+    const account = (await this.store.listAccounts())[0];
+    // No AWS linked → there is nothing deployed to be stale, and asking anyway would send a
+    // brand-new user's first launch on a scan of every AWS region to learn what we already know.
+    if (!account) return { state: "absent", deployed: null, expected: TEMPLATE_VERSION };
+    try {
+      return await this.aws.readSetupVersion(regionFor(account));
+    } catch (err) {
+      return {
+        state: "unknown",
+        deployed: null,
+        expected: TEMPLATE_VERSION,
+        reason: (err as Error).message?.trim() || "the setup stack could not be read",
+      };
+    }
+  }
+
   /** The CloudFormation template for the broker role + minimal operator for this account. */
   async roleTemplate(accountId: string): Promise<{ operator: CallerIdentity; templateJson: string }> {
     const account = (await this.store.listAccounts()).find((a) => a.id === accountId);
@@ -171,6 +208,8 @@ export class BrokerService {
     account: ConnectedAccount;
     /** Set when this machine reused a setup living in another region (nothing was created). */
     joinedExistingSetupIn?: string;
+    /** Set when the run connected this machine but could NOT re-apply the template. */
+    setupNotUpdated?: boolean;
     /** Set when the oldest operator key was retired to stay within IAM's 2-key limit. */
     evictedAccessKeyId?: string;
   }> {
@@ -200,6 +239,7 @@ export class BrokerService {
     const target = existing ?? accounts.find((a) => a.accountId === result.accountId) ?? null;
     const extras = {
       ...(result.joinedExistingSetupIn ? { joinedExistingSetupIn: result.joinedExistingSetupIn } : {}),
+      ...(result.setupNotUpdated ? { setupNotUpdated: true } : {}),
       ...(result.evictedAccessKeyId ? { evictedAccessKeyId: result.evictedAccessKeyId } : {}),
     };
     if (target) {

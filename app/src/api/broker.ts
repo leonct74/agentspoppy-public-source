@@ -30,6 +30,16 @@ export interface ExtensionRuntimeState {
   iconUrl?: string;
 }
 
+/** Whether the setup deployed in the user's AWS matches this build. Mirrors the broker's. */
+export interface SetupVersionStatus {
+  /** `absent`/`pending` are deliberately silent — see the broker's setup-version.ts. */
+  state: "current" | "outdated" | "unknown" | "absent" | "pending";
+  deployed: number | null;
+  expected: number;
+  /** Plain-language why-we-can't-tell, shown to the user verbatim. */
+  reason?: string;
+}
+
 /** Recent account activity, attributed (external = did not go through AgentsPoppy). */
 export interface ActivityReport {
   events: ActivityEvent[];
@@ -272,6 +282,13 @@ export const broker = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
     }),
+  /**
+   * Is the broker role deployed in the user's AWS the one this app expects? The guardrails
+   * live in THEIR account, so a tightened one changes nothing until they re-apply setup.
+   * Read-only, and the broker never throws from it — an unreadable answer comes back as
+   * `unknown`, which prompts but says "couldn't check" rather than crying wolf.
+   */
+  setupStatus: () => req<SetupVersionStatus>("/aws/setup-status"),
   createAccount: (input: { accountId: string; alias?: string; regions?: string[]; roleArn?: string }) =>
     req<ConnectedAccount>("/accounts", {
       method: "POST",
@@ -302,6 +319,8 @@ export const broker = {
       account: ConnectedAccount;
       /** Present when this machine reused a setup living in another region (nothing was created). */
       joinedExistingSetupIn?: string;
+      /** Present when the machine was connected but the setup template could NOT be re-applied. */
+      setupNotUpdated?: boolean;
       /** Present when the oldest operator key was retired to stay within IAM's 2-key limit. */
       evictedAccessKeyId?: string;
     }>(

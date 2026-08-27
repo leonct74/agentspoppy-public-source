@@ -17,6 +17,7 @@ import { PurchasesView } from "./views/PurchasesView";
 import { OnboardingSplash } from "./views/OnboardingSplash";
 import { ApprovalsBar } from "./components/ApprovalsBar";
 import { UpdateBanner } from "./components/UpdateBanner";
+import { SetupUpdateBanner } from "./components/SetupUpdateBanner";
 import { WhatsNew } from "./components/WhatsNew";
 import { Sidebar, type ActiveSection } from "./components/Sidebar";
 import { Icon } from "./components/Icon";
@@ -49,6 +50,9 @@ export function App() {
   const [accounts, setAccounts] = useState<ConnectedAccount[]>([]);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [view, setView] = useState<View>({ type: "list" });
+  // Bumped whenever setup may have changed, so the staleness banner re-checks instead of
+  // nagging a user who has just re-applied.
+  const [setupCheckKey, setSetupCheckKey] = useState(0);
   // Where Purchases' back arrow returns to — the view the user was on when they opened it.
   const purchasesReturnTo = useRef<View>({ type: "list" });
   // Extensions opened this session. We keep their iframes MOUNTED (just hidden when you
@@ -451,6 +455,14 @@ export function App() {
         )}
 
         <UpdateBanner />
+        {/* Not on the connect screen itself: that IS the fix, and a banner telling someone
+            to do the thing they are already doing is pure noise. */}
+        {view.type !== "connect" && (
+          <SetupUpdateBanner
+            refreshKey={setupCheckKey}
+            onUpdate={() => setView({ type: "connect", action: "redeploy" })}
+          />
+        )}
         <ApprovalsBar
           approvals={approvals}
           connections={connections}
@@ -523,8 +535,12 @@ export function App() {
             onBack={() => {
               setView({ type: "list" });
               void refreshList();
+              setSetupCheckKey((n) => n + 1); // leaving setup = re-read what's deployed
             }}
-            onChanged={() => void refreshList()}
+            onChanged={() => {
+              void refreshList();
+              setSetupCheckKey((n) => n + 1);
+            }}
           />
         )}
 

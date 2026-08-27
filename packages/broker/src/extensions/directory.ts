@@ -796,21 +796,54 @@ export class DirectoryService {
  */
 type Grant = { service: string; actions: string[]; resourceScope: string };
 const fmtGrant = (g: Grant) => `${g.service} — ${g.resourceScope} (${g.actions.join(", ")})`;
-const grantSig = (g: Grant) => JSON.stringify([g.service, [...g.actions].sort(), g.resourceScope]);
 
 /** The AWS grants a manifest declares, as readable lines — the "what it can do now" reference. */
 function formatGrants(m: ExtensionManifest): string[] {
   return ((m.permissionSet?.grants ?? []) as Grant[]).map(fmtGrant);
 }
 
+/** Identity of a grant as a PLACE — same service, same resources. Its actions may differ. */
+const grantPlace = (g: Grant) => `${g.service}\u0000${g.resourceScope}`;
+
+/**
+ * What changed between two manifests' AWS grants, at the granularity a person can act on.
+ *
+ * The first version diffed whole grants by a signature that included their actions, so adding
+ * ONE action to an existing grant reported the entire grant as "new access" — fourteen actions
+ * the user had already approved, with the one that actually changed buried among them. A
+ * consent prompt whose diff is mostly noise is a consent prompt people learn to click past,
+ * which costs more than the prompt buys.
+ *
+ * So a grant that exists in both manifests for the same service+scope is reported as an action
+ * delta; only a genuinely new or removed service+scope is reported whole. `scopeChanged` is
+ * unchanged in meaning — ANY difference still supersedes the connection and asks the user
+ * again. This governs what they are told, not whether they are asked.
+ */
 function grantDiff(
   installed: ExtensionManifest,
   next: ExtensionManifest,
 ): { scopeChanged: boolean; grantsAdded: string[]; grantsRemoved: string[] } {
-  const before = new Map(((installed.permissionSet?.grants ?? []) as Grant[]).map((g) => [grantSig(g), g]));
-  const after = new Map(((next.permissionSet?.grants ?? []) as Grant[]).map((g) => [grantSig(g), g]));
-  const grantsAdded = [...after].filter(([k]) => !before.has(k)).map(([, g]) => fmtGrant(g));
-  const grantsRemoved = [...before].filter(([k]) => !after.has(k)).map(([, g]) => fmtGrant(g));
+  const before = new Map(((installed.permissionSet?.grants ?? []) as Grant[]).map((g) => [grantPlace(g), g]));
+  const after = new Map(((next.permissionSet?.grants ?? []) as Grant[]).map((g) => [grantPlace(g), g]));
+
+  const grantsAdded: string[] = [];
+  const grantsRemoved: string[] = [];
+
+  for (const [place, g] of after) {
+    const prev = before.get(place);
+    if (!prev) {
+      grantsAdded.push(fmtGrant(g)); // a place it could not reach at all before
+      continue;
+    }
+    const had = new Set(prev.actions);
+    const has = new Set(g.actions);
+    const gained = g.actions.filter((a) => !had.has(a));
+    const lost = prev.actions.filter((a) => !has.has(a));
+    if (gained.length) grantsAdded.push(`${g.service} — ${g.resourceScope} (+ ${gained.join(", ")})`);
+    if (lost.length) grantsRemoved.push(`${g.service} — ${g.resourceScope} (no longer ${lost.join(", ")})`);
+  }
+  for (const [place, g] of before) if (!after.has(place)) grantsRemoved.push(fmtGrant(g));
+
   return { scopeChanged: grantsAdded.length > 0 || grantsRemoved.length > 0, grantsAdded, grantsRemoved };
 }
 

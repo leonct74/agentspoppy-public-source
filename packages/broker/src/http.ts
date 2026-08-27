@@ -143,6 +143,12 @@ export async function handle(
       return send(res, 200, await service.getAwsIdentity());
     }
 
+    // /aws/setup-status — is the broker role deployed in this account the one this host
+    // expects? Read-only; host-only like every other /aws route.
+    if (parts[0] === "aws" && parts[1] === "setup-status" && parts.length === 2 && method === "GET") {
+      return send(res, 200, await service.getSetupStatus());
+    }
+
     // /aws/bootstrap — AUTOMATED setup with NO account linked yet (fresh machine):
     // derive + upsert the account from the setup creds. In-memory creds, never persisted.
     if (parts[0] === "aws" && parts[1] === "bootstrap" && parts.length === 2 && method === "POST") {

@@ -31,7 +31,8 @@ import {
   writeAgentsPoppyProfile,
   type AwsKeyInput,
 } from "./credentials";
-import { DEFAULT_OPERATOR_NAME, DEFAULT_ROLE_NAME, roleTemplateJson } from "./role-template";
+import { BOUNDARY_POLICY_NAME, DEFAULT_OPERATOR_NAME, DEFAULT_ROLE_NAME, roleTemplateJson } from "./role-template";
+import { setupVersionStatus, type SetupStackRead, type SetupVersionStatus } from "./setup-version";
 import { STANDARD_REGIONS } from "./regions";
 import type { CallerIdentity } from "./identity";
 // Type-only — erased at compile time, so the SDK still loads lazily.
@@ -72,6 +73,12 @@ export interface BootstrapResult {
    * need to run setup again.
    */
   evictedAccessKeyId?: string;
+  /**
+   * Set when the run connected this machine but could NOT re-apply the template — the
+   * credentials in hand weren't allowed to update the stack where it lives. The setup still
+   * works; it is simply still the old version, and saying so is the whole point.
+   */
+  setupNotUpdated?: boolean;
 }
 
 export interface DescribedStack {
@@ -117,12 +124,28 @@ export interface BootstrapGateway {
    * cross-region case falls back to the guidance error.
    */
   describeStackInRegion?(region: string): Promise<DescribedStack | null>;
+  /**
+   * The reason CloudFormation gives for the first failed resource — the difference between
+   * "the update didn't work" and "the key you used is missing iam:CreatePolicy". Optional:
+   * without it the guidance names the most likely cause rather than the actual one.
+   */
+  describeFailureReason?(region?: string): Promise<string | null>;
+  /**
+   * Re-apply the template to the stack in ANOTHER region. The bootstrap stack is regional but
+   * the setup it creates is account-global, so a machine whose configured region differs from
+   * the stack's must still be able to UPDATE it — otherwise "re-apply setup" is a no-op for
+   * that user and there is no in-app path to their guardrails at all.
+   */
+  updateStackInRegion?(region: string, templateBody: string): Promise<void>;
 }
 
 const IN_PROGRESS = /_IN_PROGRESS$/;
 const COMPLETE = new Set(["CREATE_COMPLETE", "UPDATE_COMPLETE", "UPDATE_ROLLBACK_COMPLETE"]);
 // States a previous attempt can be stuck in that are unusable and must be cleared
 // before we can recreate the stack.
+/** An update that ended here changed nothing: the previous template is still deployed. */
+const ROLLED_BACK = new Set(["UPDATE_ROLLBACK_COMPLETE", "UPDATE_ROLLBACK_FAILED"]);
+
 const UNUSABLE = new Set([
   "ROLLBACK_COMPLETE",
   "ROLLBACK_FAILED",
@@ -175,7 +198,15 @@ export async function runBootstrap(
 
   // 1) Ensure the stack exists and is complete (resumable). If the setup already
   //    lives in ANOTHER region, this JOINS it (second computer) instead of failing.
-  const { stack, joinedRegion } = await ensureStack(gw, who.accountId, who.arn, input.region, sleep, pollMs, maxPolls);
+  const { stack, joinedRegion, notUpdated } = await ensureStack(
+    gw,
+    who.accountId,
+    who.arn,
+    input.region,
+    sleep,
+    pollMs,
+    maxPolls,
+  );
   const brokerRoleArn = stack.outputs.BrokerRoleArn;
   const operatorUserName = stack.outputs.OperatorUserName ?? DEFAULT_OPERATOR_NAME;
   if (!brokerRoleArn) {
@@ -211,6 +242,7 @@ export async function runBootstrap(
     operatorUserName,
     operatorAccessKeyId: key.accessKeyId,
     ...(joinedRegion ? { joinedExistingSetupIn: joinedRegion } : {}),
+    ...(notUpdated ? { setupNotUpdated: true } : {}),
     ...(evictedAccessKeyId ? { evictedAccessKeyId } : {}),
   };
 }
@@ -261,6 +293,138 @@ function alreadySetUpError(originRegion: string | null, thisRegion: string): Err
   );
 }
 
+/**
+ * The credentials in hand cannot modify an existing, complete setup stack. Whether that is
+ * good news or bad news depends entirely on whether the deployed setup is CURRENT — so say
+ * which, rather than reassuring everyone equally.
+ */
+function cannotUpdateStackError(status: SetupVersionStatus, region: string): Error {
+  if (status.state === "current") {
+    return new Error(
+      `AgentsPoppy is already set up in ${region} and up to date (setup version ${status.deployed}) — ` +
+        `there's nothing to set up. You don't need to run setup again; just use AgentsPoppy as normal.`,
+    );
+  }
+  const which =
+    status.state === "outdated"
+      ? `Your setup is version ${status.deployed}; this version of AgentsPoppy expects ${status.expected}.`
+      : `AgentsPoppy couldn't tell which setup version you have${status.reason ? ` (${status.reason})` : ""}.`;
+  return new Error(
+    `Your AgentsPoppy setup needs updating, but these credentials aren't allowed to change it. ${which} ` +
+      `The credentials on this machine are the non-admin operator, which deliberately can't modify the setup — ` +
+      `that's what stops a connected app rewriting its own guardrails. ` +
+      `Click "Use different credentials for this step" and paste your admin keys, or a key carrying the ` +
+      `AgentsPoppy access policy, then re-apply setup. Nothing else changes: it's an in-place update.`,
+  );
+}
+
+/**
+ * Read the deployed bootstrap stack's outputs, wherever it lives, for the staleness check.
+ * Read-only and permission-cheap: the operator already holds `cloudformation:DescribeStacks`.
+ *
+ * Every failure mode is reported as itself. In particular a stack that cannot be READ is
+ * never reported as absent or current — see setup-version.ts.
+ */
+export async function readSetupStack(gw: BootstrapGateway, thisRegion: string): Promise<SetupStackRead> {
+  let here: DescribedStack | null;
+  try {
+    here = await gw.describeStack();
+  } catch (err) {
+    return { ok: false, kind: "unreadable", reason: readFailureReason(err) };
+  }
+  if (here && !here.status.startsWith("DELETE_")) {
+    return IN_PROGRESS.test(here.status) ? { ok: false, kind: "pending" } : { ok: true, outputs: here.outputs };
+  }
+
+  // Setup is account-GLOBAL but its stack is regional, so "not in this region" does not mean
+  // "not set up" — a second machine, or a user who changed region, has it elsewhere.
+  const origin = (await gw.findSetupStackRegion?.().catch(() => null)) ?? null;
+  if (origin && origin !== thisRegion && gw.describeStackInRegion) {
+    try {
+      const there = await gw.describeStackInRegion(origin);
+      if (there && !there.status.startsWith("DELETE_")) {
+        return IN_PROGRESS.test(there.status) ? { ok: false, kind: "pending" } : { ok: true, outputs: there.outputs };
+      }
+    } catch (err) {
+      return { ok: false, kind: "unreadable", reason: readFailureReason(err) };
+    }
+  }
+  return { ok: false, kind: "absent" };
+}
+
+/** A plain-language reason, because it is shown to the user verbatim. */
+function readFailureReason(err: unknown): string {
+  const msg = (err as Error)?.message ?? "";
+  if (/not authorized|access denied|explicit deny/i.test(msg)) {
+    return "these AWS credentials aren't allowed to read the setup stack";
+  }
+  if (/expired|invalid.*token|signature/i.test(msg)) return "these AWS credentials are expired or invalid";
+  return msg.trim() || "the setup stack could not be read";
+}
+
+/**
+ * Why the re-apply rolled back, in words the user can act on.
+ *
+ * The likeliest cause is worth naming even when the events can't be read: the setup policy
+ * gained `iam:CreatePolicy` when the template gained a managed policy, and nothing updates a
+ * policy already attached inside a user's IAM. So every user who followed the least-privilege
+ * advice holds a policy one statement short of what their next re-apply needs — and since
+ * `cloudformation:UpdateStack` itself IS permitted, the API call succeeds and CloudFormation
+ * fails asynchronously. This is the only place they can be told.
+ */
+async function updateRolledBackMessage(gw: BootstrapGateway, region?: string): Promise<string> {
+  const reason = (await gw.describeFailureReason?.(region).catch(() => null)) ?? null;
+  const looksLikePermissions = reason === null || /not authorized|access denied|explicit deny/i.test(reason);
+  return (
+    "The setup update was rolled back by AWS, so nothing changed — your AgentsPoppy setup is " +
+    "still the previous version." +
+    (reason ? ` AWS said: ${reason}` : "") +
+    (looksLikePermissions
+      ? ` The usual cause is an older AgentsPoppy access policy on the key you used: this setup needs ` +
+        `"iam:CreatePolicy" on arn:aws:iam::*:policy/${BOUNDARY_POLICY_NAME}, which earlier versions of ` +
+        `the policy did not grant. Re-copy the current AgentsPoppy access policy onto that IAM user (or ` +
+        `use admin keys once), then re-apply setup.`
+      : "")
+  );
+}
+
+/**
+ * Re-apply the template to a stack that lives in another region, then wait for it there.
+ *
+ * Degrades rather than blocks: a second computer signing in with credentials that cannot
+ * update the stack still needs its own operator key, so a refusal is reported (`notUpdated`)
+ * instead of thrown. What must never happen is applying nothing and calling it success.
+ */
+async function reapplyInOriginRegion(
+  gw: BootstrapGateway,
+  origin: string,
+  accountId: string,
+  current: DescribedStack,
+  sleep: (ms: number) => Promise<void>,
+  pollMs: number,
+  maxPolls: number,
+): Promise<{ stack: DescribedStack; notUpdated?: boolean }> {
+  if (!gw.updateStackInRegion || !gw.describeStackInRegion) return { stack: current, notUpdated: true };
+  try {
+    await gw.updateStackInRegion(origin, roleTemplateJson({ operatorAccountId: accountId }));
+  } catch {
+    // Denied / unreachable — the join still stands, but nothing was applied.
+    return { stack: current, notUpdated: true };
+  }
+  let settled: DescribedStack | null = null;
+  for (let i = 0; i < maxPolls && !settled; i++) {
+    const s = await gw.describeStackInRegion(origin).catch(() => null);
+    if (s && !IN_PROGRESS.test(s.status)) settled = s;
+    else await sleep(pollMs);
+  }
+  // Never fall back to the PRE-update stack on a timeout: that would report the old template
+  // as the outcome of an update we have no result for — success by default, which is the
+  // failure mode this whole pass is closing.
+  if (!settled) throw new Error(`Timed out waiting for the setup stack in ${origin} to finish updating.`);
+  if (ROLLED_BACK.has(settled.status)) throw new Error(await updateRolledBackMessage(gw, origin));
+  return { stack: settled };
+}
+
 async function ensureStack(
   gw: BootstrapGateway,
   accountId: string,
@@ -269,7 +433,7 @@ async function ensureStack(
   sleep: (ms: number) => Promise<void>,
   pollMs: number,
   maxPolls: number,
-): Promise<{ stack: DescribedStack; joinedRegion?: string }> {
+): Promise<{ stack: DescribedStack; joinedRegion?: string; notUpdated?: boolean }> {
   let s = await gw.describeStack();
 
   // Mid-flight from a previous attempt → wait for it to settle.
@@ -298,7 +462,14 @@ async function ensureStack(
       const origin = await findOriginRegion(gw);
       if (origin && origin !== thisRegion && gw.describeStackInRegion) {
         const there = await gw.describeStackInRegion(origin).catch(() => null);
-        if (there && COMPLETE.has(there.status)) return { stack: there, joinedRegion: origin };
+        if (there && COMPLETE.has(there.status)) {
+          // Joining is not the same as leaving it alone. The template is re-applied THERE, so
+          // a user whose configured region differs from their stack's still gets their
+          // guardrails updated — without this, "re-apply setup" silently changed nothing and
+          // then reported success, and no path through the app could ever fix them.
+          const applied = await reapplyInOriginRegion(gw, origin, accountId, there, sleep, pollMs, maxPolls);
+          return { stack: applied.stack, joinedRegion: origin, ...(applied.notUpdated ? { notUpdated: true } : {}) };
+        }
       }
       throw alreadySetUpError(origin, thisRegion);
     }
@@ -317,15 +488,26 @@ async function ensureStack(
     try {
       await gw.updateStack(roleTemplateJson({ operatorAccountId: accountId }));
     } catch (err) {
-      // The stack is already here and complete. If these creds simply can't modify it — e.g. the
-      // operator/runtime key, which has no setup permissions — setup is already done; say so plainly
-      // instead of surfacing a raw "not authorized: cloudformation:UpdateStack".
+      // The stack is already here and complete, and these credentials can't modify it — almost
+      // always the operator/runtime key, which deliberately has no setup permissions.
+      //
+      // This used to translate to a flat "there's nothing to set up", which is TRUE for someone
+      // who re-ran setup out of caution and FALSE — dangerously so — for someone who came here
+      // from the "your broker role is out of date" banner: they'd be reassured that everything
+      // was fine while nothing had changed. We know the deployed version here, so answer the
+      // question they actually have. (docs/specs/broker-role-v2.md)
       if (/not authorized|access denied/i.test((err as Error).message ?? "")) {
-        throw alreadySetUpError(thisRegion, thisRegion);
+        throw cannotUpdateStackError(setupVersionStatus({ ok: true, outputs: s.outputs }), thisRegion);
       }
       throw err;
     }
     s = await waitSettled(gw, sleep, pollMs, maxPolls);
+    // An update CloudFormation ROLLED BACK left the old template in place — the guardrails we
+    // were re-applying are still not there. UPDATE_ROLLBACK_COMPLETE is a perfectly good state
+    // to *find* a stack in, which is why it lives in COMPLETE; as the verdict on an update we
+    // just started it means failure. Reporting it as success is how a user ends up in an
+    // "update → done → still out of date" loop and is never told why.
+    if (s && ROLLED_BACK.has(s.status)) throw new Error(await updateRolledBackMessage(gw));
   }
 
   if (!s || !COMPLETE.has(s.status)) {
@@ -457,6 +639,43 @@ export function sdkBootstrapGateway(region: string, setup?: AwsKeyInput): Bootst
         if ((err as Error).message?.includes("No updates are to be performed")) return;
         throw err;
       }
+    },
+
+    async updateStackInRegion(r, templateBody) {
+      const { CloudFormationClient, UpdateStackCommand } = await import("@aws-sdk/client-cloudformation");
+      const client = new CloudFormationClient({ region: r, credentials: await resolveCreds() });
+      try {
+        await client.send(
+          new UpdateStackCommand({
+            StackName: BOOTSTRAP_STACK_NAME,
+            TemplateBody: templateBody,
+            Capabilities: ["CAPABILITY_NAMED_IAM"],
+            Tags: [{ Key: "agentspoppy:bootstrap", Value: "true" }],
+          }),
+        );
+      } catch (err) {
+        if ((err as Error).message?.includes("No updates are to be performed")) return;
+        throw err;
+      }
+    },
+
+    async describeFailureReason(r) {
+      // Best-effort: the SETUP credentials run the update, and both the admin path and the
+      // scoped access policy hold cloudformation:DescribeStackEvents on stack/AgentsPoppy/*.
+      // A failure here just means the caller falls back to naming the likeliest cause.
+      // The region matters: a cross-region re-apply's events are in the STACK's region.
+      const { CloudFormationClient, DescribeStackEventsCommand } = await import("@aws-sdk/client-cloudformation");
+      const client = r ? new CloudFormationClient({ region: r, credentials: await resolveCreds() }) : await cfn();
+      const res = await client.send(new DescribeStackEventsCommand({ StackName: BOOTSTRAP_STACK_NAME }));
+      // Events are newest-first, so the newest *_FAILED is the one that caused THIS rollback.
+      // The stack-level event just says "resource(s) failed"; the resource-level one names it.
+      const failed = (res.StackEvents ?? []).filter(
+        (e) => e.ResourceStatus?.endsWith("_FAILED") && e.ResourceStatusReason,
+      );
+      const named = failed.find((e) => e.ResourceType !== "AWS::CloudFormation::Stack") ?? failed[0];
+      if (!named?.ResourceStatusReason) return null;
+      const where = named.LogicalResourceId ? `${named.LogicalResourceId}: ` : "";
+      return `${where}${named.ResourceStatusReason}`;
     },
 
     async deleteStack() {

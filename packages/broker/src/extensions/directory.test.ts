@@ -488,6 +488,67 @@ describe("DirectoryService", () => {
     expect(out.grantsRemoved).toEqual([]);
   });
 
+  // Step 2 of the permissions-boundary migration adds ONE action to an existing IAM grant in
+  // five poppies. Diffing whole grants reported all fourteen actions as "new access", burying
+  // the one that changed — a consent prompt that is mostly noise is one people learn to click
+  // past, which is worse than not prompting. The delta must be the delta.
+  it("applyUpdate reports an ACTION added to an existing grant as just that action", async () => {
+    const v1 = packageZip();
+    await directory({ [CATALOG_URL]: catalogJson(v1), [PACKAGE_URL]: v1 }).install(POPPY_ID);
+
+    const v2 = packageZip(
+      manifestJson({
+        version: "1.1.0",
+        permissionSet: {
+          id: "testpoppy-backend",
+          name: "TestPoppy backend",
+          description: "",
+          // Same service, same scope — one action added.
+          grants: [{ service: "s3", actions: ["CreateBucket", "DeleteBucket"], resourceScope: "tagged-as-self" }],
+          requiredTags: ["agentspoppy:connection"],
+          limits: null,
+        },
+      }),
+    );
+    const out = await directory({
+      [CATALOG_URL]: catalogJson(v2, { version: "1.1.0" }),
+      [PACKAGE_URL]: v2,
+    }).applyUpdate(POPPY_ID);
+
+    expect(out.scopeChanged).toBe(true); // still asks the user — this governs WHAT they're told
+    expect(out.grantsAdded).toHaveLength(1);
+    expect(out.grantsAdded[0]).toContain("+ DeleteBucket");
+    // The already-approved action must NOT be re-presented as new access.
+    expect(out.grantsAdded[0]).not.toContain("CreateBucket");
+    expect(out.grantsRemoved).toEqual([]);
+  });
+
+  it("applyUpdate reports an action REMOVED from a grant as a narrowing, not as a new grant", async () => {
+    const v1 = packageZip(
+      manifestJson({
+        permissionSet: {
+          id: "testpoppy-backend",
+          name: "TestPoppy backend",
+          description: "",
+          grants: [{ service: "s3", actions: ["CreateBucket", "DeleteBucket"], resourceScope: "tagged-as-self" }],
+          requiredTags: ["agentspoppy:connection"],
+          limits: null,
+        },
+      }),
+    );
+    await directory({ [CATALOG_URL]: catalogJson(v1), [PACKAGE_URL]: v1 }).install(POPPY_ID);
+
+    const v2 = packageZip(manifestJson({ version: "1.1.0" })); // back to CreateBucket only
+    const out = await directory({
+      [CATALOG_URL]: catalogJson(v2, { version: "1.1.0" }),
+      [PACKAGE_URL]: v2,
+    }).applyUpdate(POPPY_ID);
+
+    expect(out.grantsAdded).toEqual([]);
+    expect(out.grantsRemoved).toHaveLength(1);
+    expect(out.grantsRemoved[0]).toContain("no longer DeleteBucket");
+  });
+
   it("applyUpdate reports a HOST-POWER (capability) change too — not only AWS grants", async () => {
     const v1 = packageZip();
     await directory({ [CATALOG_URL]: catalogJson(v1), [PACKAGE_URL]: v1 }).install(POPPY_ID);

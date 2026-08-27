@@ -39,7 +39,7 @@ export const DEFAULT_OPERATOR_NAME = "AgentsPoppyOperator";
  * idempotent UpdateStack, so a needless one costs nothing while a missed one leaves a user
  * without a guardrail they believe they have.
  */
-export const TEMPLATE_VERSION = 2;
+export const TEMPLATE_VERSION = 3;
 
 /** The permissions boundary that caps any role a poppy creates. */
 export const BOUNDARY_POLICY_NAME = "AgentsPoppyBoundary";
@@ -162,12 +162,28 @@ export function guardrailStatements(roleName: string, operatorName: string): Cfn
       Resource: "*",
     },
     {
+      // AgentsPoppy's own three resources, which no brokered app may touch.
+      //
+      // The BOUNDARY belongs here for the same reason the role does, and the omission was a
+      // real hole: once poppy-created roles are capped by AgentsPoppyBoundary, whoever can
+      // call iam:CreatePolicyVersion on it can raise the ceiling for every one of them at
+      // once — and could poison it NOW, while it is still inert and nothing depends on it,
+      // so that the trap is already set when the requirement turns on. A ceiling that the
+      // thing beneath it can rewrite is not a ceiling.
+      //
+      // Denying iam:* (rather than an enumerated list of mutations) is deliberate: an
+      // allowlist goes stale the moment AWS adds an action, and this is the policy that
+      // protects every other protection. It costs nothing legitimate — attaching a boundary
+      // is authorised against the ROLE being created, not against the policy, and nothing in
+      // AgentsPoppy reads the boundary at runtime. The bootstrap stack itself is deployed
+      // with SETUP credentials, never with this role, so re-applying is unaffected.
       Sid: "CannotTamperWithAgentsPoppy",
       Effect: "Deny",
       Action: ["iam:*"],
       Resource: [
         sub(`arn:aws:iam::\${AWS::AccountId}:role/${roleName}`),
         sub(`arn:aws:iam::\${AWS::AccountId}:user/${operatorName}`),
+        sub(`arn:aws:iam::\${AWS::AccountId}:policy/${BOUNDARY_POLICY_NAME}`),
       ],
     },
     {

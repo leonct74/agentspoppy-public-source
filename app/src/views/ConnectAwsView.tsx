@@ -96,6 +96,14 @@ export function ConnectAwsView({ accounts, onBack, onChanged, initialAction }: C
   const [useOwnKeys, setUseOwnKeys] = useState(false);
   const [deploying, setDeploying] = useState(false);
   const [deployError, setDeployError] = useState<string | null>(null);
+  /**
+   * A re-apply that CloudFormation rolled back on `iam:CreatePolicy` means one thing: the
+   * AgentsPoppy policy attached to this IAM user predates the permissions boundary. The panel
+   * that fixes that already exists — show it, rather than leaving the user with a paragraph of
+   * prose describing a fix they then have to find. Matched on the action name, not on the words
+   * "access policy", which the (unrelated) wrong-credentials message also contains.
+   */
+  const stalePolicyError = !!deployError && /iam:CreatePolicy/i.test(deployError);
   // "Reused your existing setup" note after a cross-region join (second computer).
   const [deployNote, setDeployNote] = useState<string | null>(null);
   // Re-run the deploy on an ALREADY-set-up account (e.g. to apply a tightened role
@@ -253,7 +261,7 @@ export function ConnectAwsView({ accounts, onBack, onChanged, initialAction }: C
       // (A re-apply reuses them too; if they're the non-admin operator the deploy
       // fails and the user can switch to "different credentials".)
       const pasteKeys = useOwnKeys || !hasIdentity;
-      const { brokerRoleArn, joinedExistingSetupIn, evictedAccessKeyId } = await broker.deployBootstrap(
+      const { brokerRoleArn, joinedExistingSetupIn, setupNotUpdated, evictedAccessKeyId } = await broker.deployBootstrap(
         account?.id ?? null,
         pasteKeys
           ? {
@@ -270,6 +278,14 @@ export function ConnectAwsView({ accounts, onBack, onChanged, initialAction }: C
         setDeployNote(
           `This computer reused your existing setup (it lives in ${joinedExistingSetupIn}) — nothing new was created; ` +
             `this computer just received its own key.` +
+            // Never let "connected" read as "updated". These credentials weren't allowed to
+            // change the setup where it lives, so its version is unchanged — and the staleness
+            // banner will (correctly) keep saying so until someone re-applies with keys that can.
+            (setupNotUpdated
+              ? ` Note: the setup itself was NOT updated — the credentials used here can't modify it in ` +
+                `${joinedExistingSetupIn}. To update it, re-apply with your admin keys (or a key carrying the ` +
+                `current AgentsPoppy access policy).`
+              : "") +
             (evictedAccessKeyId
               ? " The oldest previous key was retired to make room (AWS allows two) — if another computer was still using it, run setup there again."
               : ""),
@@ -375,7 +391,7 @@ export function ConnectAwsView({ accounts, onBack, onChanged, initialAction }: C
       {/* Landed here from a detected policy gap (e.g. after an update that needs a new permission):
           hand the user the exact current policy to copy + a one-click re-check, so the fix is
           "replace your IAM user's policy with this" — nothing to rebuild. */}
-      {initialAction === "update-policy" && (
+      {(initialAction === "update-policy" || stalePolicyError) && (
         <div className="banner banner-warn policy-update">
           <strong>Update your AWS policy.</strong> AgentsPoppy needs a permission your IAM user's current policy
           doesn't grant — this happens when an update adds one. Replace the policy with the latest and you're done:

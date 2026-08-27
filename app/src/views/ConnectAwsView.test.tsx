@@ -146,6 +146,29 @@ describe("ConnectAwsView", () => {
     });
   }
 
+  /** A bootstrap that fails with `message` — the deploy error paths. */
+  function failingBootstrapFetch(message: string) {
+    return vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/bootstrap") && init?.method === "POST") {
+        return jsonResponse({ error: "aws_error", message }, 500);
+      }
+      if (url.endsWith("/aws/identity")) {
+        return jsonResponse({ accountId: "123456789012", arn: "arn:aws:iam::123456789012:user/admin", userId: "U" });
+      }
+      return jsonResponse({}, 404);
+    });
+  }
+
+  /** Render the re-apply step and press Deploy once the reuse panel is actually up. */
+  async function clickRedeploy(message: string) {
+    vi.stubGlobal("fetch", failingBootstrapFetch(message));
+    const linked = { ...account, roleArn: "arn:aws:iam::123456789012:role/AgentsPoppyBroker" };
+    render(<ConnectAwsView accounts={[linked]} onBack={() => {}} onChanged={() => {}} initialAction="redeploy" />);
+    // Wait for the reuse panel: clicking earlier hits the disabled paste-form button.
+    await screen.findByRole("button", { name: "Use different credentials for this step" });
+    fireEvent.click(screen.getByRole("button", { name: "Deploy setup" }));
+  }
+
   it("deploys automatically by reusing the already-connected credentials (no second paste)", async () => {
     const fetchMock = bootstrapFetch();
     vi.stubGlobal("fetch", fetchMock);
@@ -287,6 +310,30 @@ describe("ConnectAwsView", () => {
     // the account is already linked — and does NOT push the brand-new-user "create an account" path.
     expect(screen.getByRole("button", { name: "Connect" })).toBeTruthy();
     expect(screen.queryByText("Create a free AWS account")).toBeNull();
+  });
+
+  // A re-apply that AWS rolled back on iam:CreatePolicy means exactly one thing: the policy
+  // attached to this IAM user predates the permissions boundary. The panel that fixes it
+  // already existed but was only reachable from a cleanup-denied signal, so a user who hit
+  // this got a paragraph describing a fix they then had to go and find.
+  it("routes a rolled-back re-apply straight to the update-policy fix", async () => {
+    await clickRedeploy(
+      "The setup update was rolled back by AWS, so nothing changed. AWS said: AgentsPoppyBoundary: " +
+        "not authorized to perform: iam:CreatePolicy",
+    );
+    expect(await screen.findByText("Update your AWS policy.")).toBeTruthy();
+  });
+
+  // The OTHER denial — wrong credentials, not a stale policy — must NOT open that panel: its
+  // message also contains the words "access policy", and replacing the policy would not help
+  // someone whose actual problem is that they used the non-admin operator key.
+  it("does not offer the policy fix for a plain wrong-credentials refusal", async () => {
+    await clickRedeploy(
+      "Your AgentsPoppy setup needs updating, but these credentials aren't allowed to change it. " +
+        "Paste your admin keys, or a key carrying the AgentsPoppy access policy.",
+    );
+    await screen.findByText(/aren't allowed to change it/i);
+    expect(screen.queryByText("Update your AWS policy.")).toBeNull();
   });
 
   it("update-policy: shows the current policy link + replace instructions and a working Re-check", async () => {

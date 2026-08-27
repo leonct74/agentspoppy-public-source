@@ -33,6 +33,7 @@ no gaps, no excess.
 | CloudFormation on `stack/AgentsPoppy/*` | `CreateStack`, `UpdateStack`, `DeleteStack`, `DescribeStacks`, `DescribeStackEvents`, `DescribeStackResources`, `ListStackResources`, `GetTemplate`, `CreateChangeSet`, `DescribeChangeSet`, `ExecuteChangeSet`, `DeleteChangeSet`, `TagResource` | Deploy / update / delete the bootstrap stack and read its progress |
 | CloudFormation (`Resource: *`) | `ValidateTemplate`, `GetTemplateSummary` | The console validates the uploaded template (these don't support resource-level ARNs) |
 | IAM on `role/AgentsPoppyBroker` | `CreateRole`, `DeleteRole`, `GetRole`, `UpdateRole`, `UpdateAssumeRolePolicy`, `TagRole`, `UntagRole`, `PutRolePolicy`, `DeleteRolePolicy`, `GetRolePolicy`, `ListRolePolicies`, `ListAttachedRolePolicies` | Create / update / tear down **only** the broker role and its inline policy |
+| IAM on `policy/AgentsPoppyBoundary` | `CreatePolicy`, `DeletePolicy`, `GetPolicy`, `GetPolicyVersion`, `ListPolicyVersions`, `CreatePolicyVersion`, `DeletePolicyVersion`, `ListEntitiesForPolicy`, `ListPolicyTags`, `TagPolicy`, `UntagPolicy` | Create / update / tear down **only** the permissions boundary — the ceiling on any IAM role a connected app creates. The one customer-managed policy the bootstrap owns |
 | IAM on `user/AgentsPoppyOperator` | `CreateUser`, `DeleteUser`, `GetUser`, `TagUser`, `UntagUser`, `PutUserPolicy`, `DeleteUserPolicy`, `GetUserPolicy`, `ListUserPolicies`, `ListAttachedUserPolicies` | Create / update / tear down **only** the operator user and its inline policy |
 | IAM on `user/AgentsPoppyOperator` | `CreateAccessKey`, `ListAccessKeys`, `DeleteAccessKey` | Mint the operator's access key (so the whole bootstrap can be done without admin) |
 | STS on `role/AgentsPoppyBroker` | `AssumeRole` | **Operate:** assume the broker role to vend scoped credentials and verify the connection |
@@ -43,9 +44,17 @@ no gaps, no excess.
 bootstrap resources — `role/AgentsPoppyBroker` and `user/AgentsPoppyOperator`. CloudFormation
 *management* is locked to the **`AgentsPoppy`** bootstrap stack; the read/teardown actions are
 `Resource: *` (they must see every app stack and tagged resource to map/tear down the account,
-and the tagging/CloudTrail APIs don't support resource-level ARNs). The bootstrap uses **inline**
-policies, so no `iam:CreatePolicy` / `AttachRolePolicy` is needed; it passes the role to no
-service, so no `iam:PassRole` is needed.
+and the tagging/CloudTrail APIs don't support resource-level ARNs). The broker role and the operator user
+carry **inline** policies, so no `iam:AttachRolePolicy` is needed, and the bootstrap passes the
+role to no service, so no `iam:PassRole` is needed. `iam:CreatePolicy` **is** needed, for exactly
+one resource: the `AgentsPoppyBoundary` managed policy (a permissions boundary has to be a
+standalone managed policy — that is the only form AWS accepts).
+
+> ⚠️ **If you attached this policy before the boundary existed, re-copy it.** Nothing updates a
+> policy already attached inside your IAM. An older copy has no `iam:CreatePolicy`, and the
+> symptom is unhelpful: `cloudformation:UpdateStack` *is* permitted, so the call succeeds and
+> CloudFormation fails asynchronously and rolls back. AgentsPoppy now detects that and names this
+> as the cause rather than reporting the update as done.
 
 **Why `HostResidualCleanup` is unconditioned (`Resource: *`, no tag condition).** Ideally these
 delete actions would carry an `aws:ResourceTag/agentspoppy:app` condition, but several of them

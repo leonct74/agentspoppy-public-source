@@ -312,6 +312,65 @@ gated at all.
 
 ## 7. Change history
 
+- **2026-08-27 (fault A — the boundary protects itself)** — `CannotTamperWithAgentsPoppy`
+  denied `iam:*` on the broker role and the operator user, and **not on
+  `policy/AgentsPoppyBoundary`**. Once step 3 caps every poppy-created role with that
+  boundary, whoever can call `iam:CreatePolicyVersion` on it raises the ceiling for all of
+  them at once — and could do so **now**, while the policy is still inert and nothing depends
+  on it, leaving the trap already set when the requirement turns on. A ceiling the thing
+  beneath it can rewrite is not a ceiling. The boundary is now the third resource in that
+  Deny, which the boundary itself repeats — so a role created *under* the boundary cannot
+  lift it either.
+  `iam:*` rather than an enumerated mutation list is deliberate: an allowlist goes stale the
+  moment AWS adds an action, and this is the policy that protects every other protection. It
+  costs nothing legitimate — attaching a boundary is authorised against the ROLE being
+  created, not against the policy; nothing in AgentsPoppy reads the boundary at runtime; and
+  the bootstrap stack is deployed with SETUP credentials, never with this role.
+  `TEMPLATE_VERSION` 2 → 3. No shipped poppy declares any `iam:CreatePolicy*` action today
+  (checked: MailPoppy and CrewPoppy declare `CreateRole` on name-scoped ARNs only), so there
+  was no live exploit — but nothing prevented the next manifest from asking. **Found by the
+  founder asking whether `iam:CreatePolicy` in the setup policy was dangerous.** It was not
+  (that grant is pinned to one ARN, held by a human, and its holder can already rewrite the
+  broker role's guardrails directly) — but the question was aimed one resource away from a
+  real hole. `aws/role-template.ts`.
+
+- **2026-08-27 (fault A, step 1 — detection, and three defects an adversarial review found)** —
+  the second half of step 1: the app now READS the deployed `TemplateVersion` and tells the user
+  when their broker role is older than the one this build ships. Without it the whole versioning
+  exercise was inert — a guardrail tightened here changes nothing in a user's account until they
+  re-apply, and nothing asked them to. `aws/setup-version.ts` (pure, fail-safe: an unreadable
+  version is **unknown, never current**, and `absent`/`pending` stay silent so the banner never
+  nags someone with no setup or one mid-deploy), `aws/bootstrap.ts::readSetupStack`,
+  `service.getSetupStatus`, `GET /aws/setup-status`, `app/components/SetupUpdateBanner.tsx`.
+  **A user-facing message was corrected, not just added**: re-applying with the everyday operator
+  key hits AccessDenied, and that was translated into a flat *"there's nothing to set up"* — true
+  for someone re-running out of caution, and exactly backwards for someone who followed the new
+  banner here. It now answers against the deployed version.
+  **Also fixed: step 1 shipped a live blocker.** The template gained an `AWS::IAM::ManagedPolicy`
+  and the least-privilege access policy has no `iam:CreatePolicy`, so every user who followed the
+  project's own advice would fail their next re-apply. Admin users never see it — which is why it
+  shipped. Now granted (pinned to `policy/AgentsPoppyBoundary`) with a tripwire that fails when
+  any IAM resource in the template lacks a matching create grant, plus one that fails when the
+  policy README stops describing what the policy actually grants.
+  **An adversarial review then confirmed three defects, each reproduced, and each a violation of
+  a stated principle rather than a nitpick:**
+  (1) the banner's default loader was a new closure per render *and* an effect dependency —
+  ~11,500 CloudFormation-backed calls in 300 ms, enough to throttle the account into the very
+  "couldn't check" state the module exists to avoid, and fast enough that "Not now" was undone
+  before the click finished. Every test had injected a stable loader, so none saw it;
+  (2) an update CloudFormation ROLLED BACK resolved as success, because `UPDATE_ROLLBACK_COMPLETE`
+  is a fine state to *find* a stack in and the same set was reused as the verdict on an update we
+  had just started. The affected population is exactly the least-privilege cohort above: their
+  `cloudformation:UpdateStack` is permitted, so the API call succeeds and AWS fails asynchronously.
+  It now fails loudly and names the missing grant;
+  (3) "Update setup" was a silent no-op whenever the setup stack lives in a region other than the
+  account's — the join branch returned the existing stack untouched and reported success, so those
+  users had **no path through the app to their own guardrails**. The template is now re-applied
+  where the stack actually lives; a machine whose credentials may not update it is still connected
+  but says so (`setupNotUpdated`) instead of claiming success.
+  ⚠️ **Migration:** anyone holding a pre-boundary copy of the access policy must re-copy it before
+  their next re-apply. `docs/specs/broker-role-v2.md`.
+
 - **2026-08-26 (fault A, step 1 of 3)** — groundwork for closing the IAM escalation path.
   A poppy that may create roles named `MyPoppy*` can write `*:*` onto one, pass it to a
   Lambda and invoke it; that Lambda runs as a **new principal**, so none of the broker

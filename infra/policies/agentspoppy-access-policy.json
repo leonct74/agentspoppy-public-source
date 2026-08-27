@@ -53,6 +53,24 @@
       "Resource": "arn:aws:iam::*:role/AgentsPoppyBroker"
     },
     {
+      "Sid": "CreateBoundaryPolicy",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreatePolicy",
+        "iam:DeletePolicy",
+        "iam:GetPolicy",
+        "iam:GetPolicyVersion",
+        "iam:ListPolicyVersions",
+        "iam:CreatePolicyVersion",
+        "iam:DeletePolicyVersion",
+        "iam:ListEntitiesForPolicy",
+        "iam:ListPolicyTags",
+        "iam:TagPolicy",
+        "iam:UntagPolicy"
+      ],
+      "Resource": "arn:aws:iam::*:policy/AgentsPoppyBoundary"
+    },
+    {
       "Sid": "CreateOperatorUser",
       "Effect": "Allow",
       "Action": [

@@ -2,7 +2,14 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.0
 
 import { describe, it, expect } from "vitest";
-import { guardrailStatements, roleCloudFormationTemplate, TEMPLATE_VERSION, roleTemplateJson, trustPolicy } from "./role-template";
+import {
+  BOUNDARY_POLICY_NAME,
+  guardrailStatements,
+  roleCloudFormationTemplate,
+  TEMPLATE_VERSION,
+  roleTemplateJson,
+  trustPolicy,
+} from "./role-template";
 
 describe("trustPolicy", () => {
   it("lets the operator's account assume the role and tag the session", () => {
@@ -25,12 +32,16 @@ describe("guardrailStatements", () => {
     expect(lockout?.Action).toContain("organizations:*");
   });
 
-  it("denies tampering with AgentsPoppy's own role + operator", () => {
+  it("denies tampering with AgentsPoppy's own role + operator + boundary", () => {
     const [, tamper] = guardrailStatements("AgentsPoppyBroker", "AgentsPoppyOperator");
     expect(tamper?.Effect).toBe("Deny");
     expect(tamper?.Action).toEqual(["iam:*"]);
     expect(JSON.stringify(tamper?.Resource)).toContain("role/AgentsPoppyBroker");
     expect(JSON.stringify(tamper?.Resource)).toContain("user/AgentsPoppyOperator");
+    // The boundary is the ceiling on every role a poppy creates. If the thing beneath a
+    // ceiling can rewrite it, it is not a ceiling — and it could be poisoned NOW, while
+    // still inert, so the trap is already set when step 3 turns the requirement on.
+    expect(JSON.stringify(tamper?.Resource)).toContain(`policy/${BOUNDARY_POLICY_NAME}`);
   });
 
   it("denies attaching account-admin policies to any role/group an app controls (escalation)", () => {
@@ -153,5 +164,23 @@ describe("broker role v2 — the escalation groundwork", () => {
     expect(deny.Action).toBe("sts:AssumeRole");
     // "the tag is NOT null" — i.e. only a session already carrying it is denied.
     expect(deny.Condition).toEqual({ Null: { "aws:PrincipalTag/agentspoppy:app": "false" } });
+  });
+
+  // The boundary REPEATS the guardrails (it is evaluated independently of the role that
+  // created the role), so a role created under it must be unable to rewrite the boundary
+  // either — otherwise the cap is one CreatePolicyVersion away from being lifted from the
+  // inside.
+  it("protects the boundary from roles created UNDER the boundary too", () => {
+    const b = (roleCloudFormationTemplate({ operatorAccountId: "111122223333" }) as any).Resources
+      .AgentsPoppyBoundary.Properties.PolicyDocument.Statement;
+    const tamper = b.find((s: any) => s.Sid === "CannotTamperWithAgentsPoppy");
+    expect(JSON.stringify(tamper.Resource)).toContain(`policy/${BOUNDARY_POLICY_NAME}`);
+  });
+
+  // Any change to the role, the operator or the guardrails must move the version, or a
+  // user who already deployed the previous shape is told they are up to date while missing
+  // the very protection that was added.
+  it("moved the template version when the guardrails changed", () => {
+    expect(TEMPLATE_VERSION).toBeGreaterThanOrEqual(3);
   });
 });

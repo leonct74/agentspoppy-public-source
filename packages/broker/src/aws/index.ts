@@ -16,3 +16,4 @@ export * from "./cloudtrail";
 export * from "./identity";
 export * from "./bootstrap";
 export * from "./role-template";
+export * from "./setup-version";

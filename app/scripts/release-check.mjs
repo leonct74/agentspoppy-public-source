@@ -210,6 +210,36 @@ gate(
   "re-copy infra/policies/agentspoppy-access-policy.json → app/src/assets/access-policy.json",
 );
 
+// A link that RESOLVES can still be wrong. The gate above this one was written after v0.3.2
+// shipped a policy link into the private repo and 404'd every new user for weeks — so it
+// checks that every shipped URL answers 200 anonymously. It does not check WHAT the URL
+// serves. When the app gains a permission and the public mirror has not been re-synced, the
+// "open it on GitHub" link returns a perfectly healthy 200 carrying the PREVIOUS policy, and
+// a user who copies from there attaches a policy that cannot deploy — surfacing as an
+// asynchronous CloudFormation rollback, which is about as unhelpful as an error gets.
+const POLICY_RAW_URL =
+  "https://raw.githubusercontent.com/leonct74/agentspoppy-public-source/main/infra/policies/agentspoppy-access-policy.json";
+const publishedPolicy = sh("curl", ["-sL", "--max-time", "25", POLICY_RAW_URL]).trim();
+let publishedMatches = false;
+let publishedNote = "";
+try {
+  publishedMatches = JSON.stringify(JSON.parse(publishedPolicy)) === JSON.stringify(JSON.parse(bundledPolicy));
+  if (!publishedMatches) {
+    const sids = (p) => new Set(JSON.parse(p).Statement.map((st) => st.Sid));
+    const missing = [...sids(bundledPolicy)].filter((x) => !sids(publishedPolicy).has(x));
+    publishedNote = missing.length ? `mirror is missing: ${missing.join(", ")}` : "mirror differs";
+  }
+} catch {
+  publishedNote = "the published policy could not be read as JSON";
+}
+gate(
+  "policy: the public link serves the SAME policy the app ships",
+  publishedMatches,
+  publishedMatches
+    ? "in step with the mirror"
+    : `${publishedNote} — re-run scripts/export-public.sh before releasing, or users copy a policy that can't deploy`,
+);
+
 // ── 6. --live: published funnel integrity ─────────────────────────────────
 async function fetchRetry(url, tries = 3) {
   let last;

@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.0
 
 import { describe, it, expect } from "vitest";
-import { runBootstrap, type BootstrapGateway, type DescribedStack } from "./bootstrap";
+import { readSetupStack, runBootstrap, type BootstrapGateway, type DescribedStack } from "./bootstrap";
+import { TEMPLATE_VERSION } from "./role-template";
 import type { AwsKeyInput } from "./credentials";
 
 const SETUP: AwsKeyInput = { accessKeyId: "AKIASETUP", secretAccessKey: "setup-secret" };
@@ -35,6 +36,14 @@ function fakeGateway(opts: {
   originStack?: DescribedStack | null;
   /** Model a key that can't create/update stacks (e.g. the operator/runtime key). */
   denyWrites?: boolean;
+  /** Model CloudFormation accepting UpdateStack and then failing ASYNCHRONOUSLY. */
+  updateRollsBackTo?: DescribedStack;
+  /** What DescribeStackEvents reports for the failure (null = can't read it). */
+  failureReason?: string | null;
+  /** Model credentials that may not update the stack where it lives (cross-region re-apply). */
+  denyOriginUpdate?: boolean;
+  /** What the origin stack settles to after a cross-region re-apply. */
+  originStackAfterUpdate?: DescribedStack;
 } = {}): BootstrapGateway & { log: string[]; created: AwsKeyInput[]; deletedKeys: string[] } {
   const timeline = [...(opts.initialStacks ?? [null])];
   let current: DescribedStack | null = timeline.shift() ?? null;
@@ -44,6 +53,7 @@ function fakeGateway(opts: {
   const created: AwsKeyInput[] = [];
   const deletedKeys: string[] = [];
   let keyCounter = 0;
+  let originCurrent: DescribedStack | null = opts.originStack ?? null;
 
   const advance = () => {
     if (timeline.length) current = timeline.shift()!;
@@ -70,7 +80,16 @@ function fakeGateway(opts: {
     async updateStack() {
       if (opts.denyWrites) throw denied("cloudformation:UpdateStack");
       log.push("updateStack");
-      current = COMPLETE;
+      // The real failure shape: the API call succeeds, then CFN rolls back on its own.
+      current = opts.updateRollsBackTo ?? COMPLETE;
+    },
+    async describeFailureReason() {
+      return opts.failureReason ?? null;
+    },
+    async updateStackInRegion(r: string) {
+      if (opts.denyOriginUpdate) throw denied("cloudformation:UpdateStack");
+      log.push(`updateStackInRegion:${r}`);
+      originCurrent = opts.originStackAfterUpdate ?? originCurrent;
     },
     async deleteStack() {
       log.push("deleteStack");
@@ -96,7 +115,7 @@ function fakeGateway(opts: {
     },
     async describeStackInRegion(r) {
       log.push(`describeStackInRegion:${r}`);
-      return opts.originStack ?? null;
+      return originCurrent;
     },
   };
 }
@@ -199,7 +218,12 @@ describe("runBootstrap", () => {
     });
     expect(gw.log).toContain("describeStackInRegion:us-east-1");
     expect(gw.log).not.toContain("createStack");
-    expect(gw.log).not.toContain("updateStack"); // the origin machine owns template upgrades
+    // Joining re-applies the template WHERE THE STACK LIVES. It used to leave it untouched
+    // ("the origin machine owns template upgrades"), which meant a user whose region differed
+    // from their stack's had NO in-app path to their own guardrails — and was told the
+    // re-apply had succeeded. Nothing new is created either way.
+    expect(gw.log).toContain("updateStackInRegion:us-east-1");
+    expect(res.setupNotUpdated).toBeUndefined();
     expect(res.joinedExistingSetupIn).toBe("us-east-1");
     expect(res.brokerRoleArn).toContain("AgentsPoppyBroker");
     expect(gw.deletedKeys).toEqual([]); // the Mac's key survives
@@ -235,18 +259,39 @@ describe("runBootstrap", () => {
     expect(gw.log).toContain("createStack");
   });
 
-  it("explains (no raw AccessDenied) when setup re-runs where the stack already exists but the key can't update it", async () => {
-    // The user switched to us-east-1 (where the setup already lives) and pressed Deploy. The
-    // operator key can't UpdateStack — but it's already set up here, so say that plainly.
+  // The re-apply-denied message used to be a flat "there's nothing to set up". That is true
+  // for someone re-running setup out of caution and FALSE for someone who followed the
+  // "your broker role is out of date" banner here — they were reassured while nothing
+  // changed. The answer now depends on the deployed version, because that's the question.
+  it("tells a user whose setup is STALE what the re-apply actually needs", async () => {
     const gw = fakeGateway({
-      initialStacks: [COMPLETE],
+      initialStacks: [COMPLETE], // no TemplateVersion output → pre-v2 → outdated
+      callerArn: `arn:aws:iam::${ACCOUNT}:user/AgentsPoppyOperator`,
+      denyWrites: true,
+      originRegion: "us-east-1",
+    });
+    const err = await runBootstrap(
+      gw,
+      { setup: SETUP, region: "us-east-1" },
+      { ...baseOpts, writeProfile: () => {} },
+    ).catch((e: Error) => e);
+    expect(err.message).toMatch(/needs updating/i);
+    expect(err.message).toMatch(/version 1/);
+    expect(err.message).toMatch(/admin keys|access policy/i);
+    // The old, reassuring translation must NOT come back.
+    expect(err.message).not.toMatch(/nothing to set up/i);
+  });
+
+  it("still says 'nothing to set up' when the deployed setup is actually current", async () => {
+    const gw = fakeGateway({
+      initialStacks: [{ ...COMPLETE, outputs: { ...COMPLETE.outputs, TemplateVersion: String(TEMPLATE_VERSION) } }],
       callerArn: `arn:aws:iam::${ACCOUNT}:user/AgentsPoppyOperator`,
       denyWrites: true,
       originRegion: "us-east-1",
     });
     await expect(
       runBootstrap(gw, { setup: SETUP, region: "us-east-1" }, { ...baseOpts, writeProfile: () => {} }),
-    ).rejects.toThrow(/already set up and running in us-east-1.*don't need to run setup/is);
+    ).rejects.toThrow(/already set up in us-east-1 and up to date.*nothing to set up/is);
   });
 
   it("explains it (no raw AccessDenied) when run with the operator key, which can't read IAM", async () => {
@@ -261,5 +306,157 @@ describe("runBootstrap", () => {
       runBootstrap(gw, { setup: SETUP, region: "eu-west-1" }, { ...baseOpts, writeProfile: () => {} }),
     ).rejects.toThrow(/already set up in this account/i);
     expect(gw.log).not.toContain("createStack");
+  });
+});
+
+// The staleness read. Its whole job is to be honest about which of four situations it is
+// in, because three of them look identical from the outside ("no version came back").
+describe("readSetupStack", () => {
+  it("returns the outputs of a complete stack in this region", async () => {
+    const gw = fakeGateway({ initialStacks: [COMPLETE] });
+    await expect(readSetupStack(gw, "eu-west-1")).resolves.toEqual({ ok: true, outputs: COMPLETE.outputs });
+  });
+
+  it("reports a stack that is mid-deploy as pending, not as stale", async () => {
+    const gw = fakeGateway({ initialStacks: [{ status: "UPDATE_IN_PROGRESS", outputs: {} }] });
+    await expect(readSetupStack(gw, "eu-west-1")).resolves.toEqual({ ok: false, kind: "pending" });
+  });
+
+  it("reports a genuinely missing stack as absent, so it never nags", async () => {
+    const gw = fakeGateway({ initialStacks: [null], originRegion: null });
+    await expect(readSetupStack(gw, "eu-west-1")).resolves.toEqual({ ok: false, kind: "absent" });
+  });
+
+  // Setup is account-global but its stack is regional: "not here" is not "not set up".
+  it("finds the stack when it lives in another region", async () => {
+    const gw = fakeGateway({ initialStacks: [null], originRegion: "us-east-1", originStack: COMPLETE });
+    await expect(readSetupStack(gw, "eu-west-1")).resolves.toEqual({ ok: true, outputs: COMPLETE.outputs });
+  });
+
+  // Fail safe, and in plain words — the reason is shown to the user verbatim.
+  it("reports a denied read as unreadable, never as absent", async () => {
+    const gw = fakeGateway({ initialStacks: [COMPLETE] });
+    gw.describeStack = async () => {
+      throw denied("cloudformation:DescribeStacks");
+    };
+    const r = await readSetupStack(gw, "eu-west-1");
+    expect(r).toEqual({ ok: false, kind: "unreadable", reason: expect.stringContaining("aren't allowed to read") });
+  });
+
+  it("ignores a deleted shell rather than reading its stale outputs", async () => {
+    const gw = fakeGateway({ initialStacks: [{ status: "DELETE_COMPLETE", outputs: COMPLETE.outputs }], originRegion: null });
+    await expect(readSetupStack(gw, "eu-west-1")).resolves.toEqual({ ok: false, kind: "absent" });
+  });
+});
+
+// The population this whole change is aimed at: users who followed the least-privilege
+// advice. Their ATTACHED IAM policy predates the boundary, so `iam:CreatePolicy` is missing —
+// but `cloudformation:UpdateStack` IS granted, so the API call succeeds and CloudFormation
+// fails asynchronously. UPDATE_ROLLBACK_COMPLETE lives in COMPLETE (a fine state to FIND a
+// stack in), which used to make a failed update resolve as success: "updated" → still v1 →
+// banner returns → forever, with the real cause never surfaced.
+describe("a re-apply that CloudFormation rolls back", () => {
+  const ROLLED_BACK: DescribedStack = { status: "UPDATE_ROLLBACK_COMPLETE", outputs: COMPLETE.outputs };
+
+  it("fails loudly instead of reporting a successful setup", async () => {
+    const gw = fakeGateway({ initialStacks: [COMPLETE], updateRollsBackTo: ROLLED_BACK });
+    await expect(
+      runBootstrap(gw, { setup: SETUP, region: "eu-west-1" }, { ...baseOpts, writeProfile: () => {} }),
+    ).rejects.toThrow(/rolled back.*nothing changed/is);
+  });
+
+  it("names the missing permission, so the user can actually fix it", async () => {
+    const gw = fakeGateway({
+      initialStacks: [COMPLETE],
+      updateRollsBackTo: ROLLED_BACK,
+      failureReason: "AgentsPoppyBoundary: API: iam:CreatePolicy User is not authorized to perform: iam:CreatePolicy",
+    });
+    const err = await runBootstrap(
+      gw,
+      { setup: SETUP, region: "eu-west-1" },
+      { ...baseOpts, writeProfile: () => {} },
+    ).catch((e: Error) => e);
+    expect(err.message).toContain("iam:CreatePolicy");
+    expect(err.message).toMatch(/access policy/i); // the actual remedy, not just the symptom
+  });
+
+  // Fail safe: an unreadable event log must still produce actionable guidance, because the
+  // likeliest cause is known even when the specific reason is not.
+  it("still names the likeliest cause when the failure reason can't be read", async () => {
+    const gw = fakeGateway({ initialStacks: [COMPLETE], updateRollsBackTo: ROLLED_BACK, failureReason: null });
+    const err = await runBootstrap(
+      gw,
+      { setup: SETUP, region: "eu-west-1" },
+      { ...baseOpts, writeProfile: () => {} },
+    ).catch((e: Error) => e);
+    expect(err.message).toContain("iam:CreatePolicy");
+    expect(err.message).toContain("AgentsPoppyBoundary");
+  });
+
+  // It must stay a legitimate state to FIND a stack in — only the verdict on an update we
+  // just started counts as failure.
+  it("still accepts a previously rolled-back stack as a usable starting point", async () => {
+    const gw = fakeGateway({ initialStacks: [ROLLED_BACK] });
+    const r = await runBootstrap(gw, { setup: SETUP, region: "eu-west-1" }, { ...baseOpts, writeProfile: () => {} });
+    expect(r.brokerRoleArn).toContain("AgentsPoppyBroker");
+    expect(gw.log).toContain("updateStack");
+  });
+});
+
+// The state the staleness banner sends people into when their configured region isn't the
+// region their setup stack lives in — reachable via the region switcher, or by a second
+// machine choosing a different region at setup. "Update setup" used to join the existing
+// stack, apply nothing, and report success, so the banner re-fired forever and no path
+// through the app could ever update those guardrails.
+describe("re-applying when the setup stack lives in another region", () => {
+  const V1: DescribedStack = { status: "UPDATE_COMPLETE", outputs: COMPLETE.outputs };
+  const V2: DescribedStack = {
+    status: "UPDATE_COMPLETE",
+    outputs: { ...COMPLETE.outputs, TemplateVersion: String(TEMPLATE_VERSION) },
+  };
+
+  const join = (over: Parameters<typeof fakeGateway>[0] = {}) =>
+    fakeGateway({
+      initialStacks: [null],
+      existingNamed: { role: true, user: true },
+      originRegion: "us-east-1",
+      originStack: V1,
+      ...over,
+    });
+
+  it("applies the template where the stack actually is", async () => {
+    const gw = join({ originStackAfterUpdate: V2 });
+    const res = await runBootstrap(gw, { setup: SETUP, region: "eu-west-1" }, { ...baseOpts, writeProfile: () => {} });
+    expect(gw.log).toContain("updateStackInRegion:us-east-1");
+    expect(res.joinedExistingSetupIn).toBe("us-east-1");
+    expect(res.setupNotUpdated).toBeUndefined(); // it really was updated
+  });
+
+  // A second computer whose credentials can't update the stack still needs its own operator
+  // key, so this degrades rather than blocking — but it must NOT read as a successful update.
+  it("still connects the machine when it may not update, and says nothing was applied", async () => {
+    const gw = join({ denyOriginUpdate: true });
+    const res = await runBootstrap(gw, { setup: SETUP, region: "eu-west-1" }, { ...baseOpts, writeProfile: () => {} });
+    expect(res.brokerRoleArn).toContain("AgentsPoppyBroker");
+    expect(res.setupNotUpdated).toBe(true);
+  });
+
+  // A poll that never settles must not silently resolve to the PRE-update stack — that is
+  // "success by default" for an update whose outcome we never learned.
+  it("times out loudly rather than reporting the old template as the outcome", async () => {
+    const gw = join({ originStackAfterUpdate: { status: "UPDATE_IN_PROGRESS", outputs: V1.outputs } });
+    await expect(
+      runBootstrap(gw, { setup: SETUP, region: "eu-west-1" }, { ...baseOpts, writeProfile: () => {} }),
+    ).rejects.toThrow(/timed out waiting for the setup stack in us-east-1/i);
+  });
+
+  it("reports a cross-region update that rolled back, rather than resolving", async () => {
+    const gw = join({
+      originStackAfterUpdate: { status: "UPDATE_ROLLBACK_COMPLETE", outputs: COMPLETE.outputs },
+      failureReason: "AgentsPoppyBoundary: not authorized to perform: iam:CreatePolicy",
+    });
+    await expect(
+      runBootstrap(gw, { setup: SETUP, region: "eu-west-1" }, { ...baseOpts, writeProfile: () => {} }),
+    ).rejects.toThrow(/rolled back/i);
   });
 });

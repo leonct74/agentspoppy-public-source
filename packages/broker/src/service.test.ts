@@ -54,6 +54,52 @@ describe("BrokerService", () => {
     await fs.rm(home, { recursive: true, force: true });
   });
 
+  // The staleness check sits on the home screen, so it must never throw and never
+  // send a brand-new user's first launch on a scan of every AWS region.
+  describe("getSetupStatus", () => {
+    it("answers 'absent' without touching AWS when no account is linked", async () => {
+      let asked = false;
+      const aws = new StubAwsBootstrap();
+      aws.readSetupVersion = async () => {
+        asked = true;
+        throw new Error("should not be reached");
+      };
+      const s = new BrokerService({
+        store: new Store(),
+        credentials: new StubCredentialVendor(),
+        cloud: new StubCloudProvider(),
+        aws,
+        activity: new StubActivityProvider(),
+      });
+      expect((await s.getSetupStatus()).state).toBe("absent");
+      expect(asked).toBe(false);
+    });
+
+    it("reports 'unknown' rather than throwing when the read blows up", async () => {
+      const aws = new StubAwsBootstrap();
+      aws.readSetupVersion = async () => {
+        throw new Error("the broker role could not be read");
+      };
+      const s = new BrokerService({
+        store: new Store(),
+        credentials: new StubCredentialVendor(),
+        cloud: new StubCloudProvider(),
+        aws,
+        activity: new StubActivityProvider(),
+      });
+      await s.linkAccount({ accountId: "123456789012", regions: ["eu-west-1"] });
+      const status = await s.getSetupStatus();
+      expect(status.state).toBe("unknown");
+      expect(status.reason).toContain("could not be read");
+    });
+
+    it("reads the deployed version for a linked account", async () => {
+      const s = service();
+      await s.linkAccount({ accountId: "123456789012", regions: ["eu-west-1"] });
+      expect((await s.getSetupStatus()).state).toBe("current");
+    });
+  });
+
   it("happy path: link → request → approve → credentials", async () => {
     const s = service();
     const account = await s.linkAccount({ accountId: "123456789012", regions: ["eu-west-1"] });
