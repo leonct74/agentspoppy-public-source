@@ -255,14 +255,27 @@ export function statementForGrant(grant: PermissionGrant, appId: string, index: 
   }
 
   const tagWrites = Action.filter((a) => TAG_WRITE_ACTION.test(bareName(a)));
+  const rules = TAG_WRITE_RULES[grant.service.toLowerCase()];
 
-  // Tag writes on a scope that genuinely narrows are already confined BY that scope, so
-  // they are left alone. Only an unnarrowed scope can reach someone else's resource.
-  if (tagWrites.length === 0 || !unbounded) {
+  // A name pattern was originally trusted to confine the grant by itself. It does not, and
+  // the exception is not exotic: AWS ids have FIXED PREFIXES, so `instance/i-*` matches
+  // every EC2 instance in the account and `userpool/eu-west-1_*` every Cognito pool in the
+  // region — while looking, to any literal-string test, exactly like `table/CrewPoppy*`,
+  // which really does narrow. No syntactic rule separates them.
+  //
+  // So the scope is no longer what decides. For a service we have PROVEN conditions work
+  // on, tag writes are conditioned ALWAYS, and the name pattern is treated as a bonus
+  // rather than as the protection. This costs nothing — a tag-on-create is authorised by
+  // the re-tag-your-own statement, which the canary established on real AWS — and it
+  // removes the whole class of "looks specific, matches everything".
+  //
+  // For a service NOT in the table the scope is still all there is: an unnarrowed one is
+  // refused below, and a name-scoped one is left as it was, because conditioning it with a
+  // key the service does not populate would be a permanent deny.
+  if (tagWrites.length === 0 || (!unbounded && !rules)) {
     return [{ Sid: `Grant${index}`, Effect: "Allow", Action, Resource: grant.resourceScope }];
   }
 
-  const rules = TAG_WRITE_RULES[grant.service.toLowerCase()];
   if (!rules) {
     // Fail CLOSED. Emitting the grant unconditioned would be the hole; emitting a
     // condition the service does not populate would deny it forever. Neither is ours to

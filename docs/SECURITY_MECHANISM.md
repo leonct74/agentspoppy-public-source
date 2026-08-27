@@ -326,7 +326,11 @@ gated at all.
   GuardDuty features, and conflating them nearly caused this run to be skipped on a false
   premise). The weaker `request-tag` shape stays in the compiler as the place a
   newly-added service sits until it has had the same run; nothing uses it today.
-  `aws/policy.ts`, `docs/specs/tag-adoption-canary.md`.
+  Also closed a bypass found while preparing to publish: an id-prefix scope
+  (`instance/i-*`, `userpool/eu-west-1_*`) matches everything of its type while reading as a
+  name pattern, and so skipped the rule entirely. For a proven service the scope no longer
+  decides — tag writes are conditioned always, and the name is a bonus rather than the
+  protection. `aws/policy.ts`, `docs/specs/tag-adoption-canary.md`.
 - **2026-08-26** — tag adoption closed in the compiler (`docs/specs/tag-adoption.md`).
   I2 says an app may touch only what carries its own tag; six of seven shipped poppies
   could also WRITE that tag on every resource of some type, so the guarantee was

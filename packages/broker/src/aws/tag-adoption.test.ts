@@ -320,3 +320,42 @@ describe("the detector must not fail open", () => {
   });
 });
 
+// Found while preparing to PUBLISH the spec, by checking a "known limit" it admitted to and
+// discovering it was a live bypass rather than a caveat. AWS ids have fixed prefixes, so an
+// id-prefix pattern matches everything of its type while reading like a name scope:
+// instance/i-* is every EC2 instance, userpool/eu-west-1_* is every pool in the region.
+// Nothing syntactic separates those from table/CrewPoppy*, which really does narrow — so
+// for a service whose conditions are proven, the scope no longer decides and tag writes are
+// conditioned regardless.
+describe("an id-prefix pattern cannot evade the rule", () => {
+  const unconditionedTagWrite = (out: ReturnType<typeof stmts>) =>
+    out.some((st) => !st.Condition && ([] as string[]).concat(st.Action).some((a) => /tag/i.test(a)));
+
+  it("conditions a tag write even when the scope looks like a name", () => {
+    for (const [service, actions, scope] of [
+      ["ec2", ["RunInstances", "CreateTags"], "arn:aws:ec2:*:*:instance/i-*"],
+      ["cognito-idp", ["CreateUserPool", "TagResource"], "arn:aws:cognito-idp:*:*:userpool/eu-west-1_*"],
+      ["amplify", ["CreateApp", "TagResource"], "arn:aws:amplify:*:*:apps/d*"],
+      ["guardduty", ["CreateFilter", "TagResource"], "arn:aws:guardduty:*:*:detector/a*"],
+    ] as [string, string[], string][]) {
+      expect(unconditionedTagWrite(stmts({ service, actions, resourceScope: scope })), `${service} ${scope}`).toBe(false);
+    }
+  });
+
+  // A genuinely narrowing name gets conditioned too now. That is intentional: the name is a
+  // bonus, not the protection, and the canary proved the conditions cost nothing.
+  it("conditions a real name pattern as well, on a proven service", () => {
+    const out = stmts({ service: "ec2", actions: ["CreateSecurityGroup", "CreateTags"], resourceScope: "arn:aws:ec2:*:*:security-group/sg-abc*" });
+    expect(unconditionedTagWrite(out)).toBe(false);
+    expect(out.find((st) => st.Sid === "Grant0TagOwn")).toBeDefined();
+  });
+
+  // …but a service with no proven conditions keeps relying on the name, because
+  // conditioning it with a key the service never populates is a permanent deny.
+  it("still leaves an unproven service's name-scoped tag write alone", () => {
+    const out = stmts({ service: "dynamodb", actions: ["CreateTable", "TagResource"], resourceScope: "arn:aws:dynamodb:*:*:table/CrewPoppy*" });
+    expect(out).toHaveLength(1);
+    expect(out[0]!.Condition).toBeUndefined();
+  });
+});
+
