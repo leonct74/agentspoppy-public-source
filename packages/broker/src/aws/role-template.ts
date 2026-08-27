@@ -29,6 +29,21 @@
 export const DEFAULT_ROLE_NAME = "AgentsPoppyBroker";
 export const DEFAULT_OPERATOR_NAME = "AgentsPoppyOperator";
 
+/**
+ * The bootstrap template's version, surfaced as a stack Output so the app can tell a user
+ * their broker role is out of date. Nothing else records what is deployed: without this,
+ * "re-apply setup" is a button nobody knows to press.
+ *
+ * Bump on ANY change to the role, the operator, or the guardrails. A version that cannot be
+ * read must be treated as UNKNOWN and prompt the same as out-of-date — a re-apply is an
+ * idempotent UpdateStack, so a needless one costs nothing while a missed one leaves a user
+ * without a guardrail they believe they have.
+ */
+export const TEMPLATE_VERSION = 2;
+
+/** The permissions boundary that caps any role a poppy creates. */
+export const BOUNDARY_POLICY_NAME = "AgentsPoppyBoundary";
+
 /** A CloudFormation policy statement — looser than the runtime one (allows intrinsics). */
 interface CfnStatement {
   Sid?: string;
@@ -167,6 +182,23 @@ export function guardrailStatements(roleName: string, operatorName: string): Cfn
       Condition: { ArnEquals: { "iam:PolicyARN": ESCALATION_ADMIN_POLICY_ARNS } },
     },
     {
+      // A poppy session that is granted sts:AssumeRole could otherwise re-assume the broker
+      // role itself — arriving with NO session tags and NO session policy, shedding both its
+      // attribution and its scope in one call, and landing on the role's full ceiling.
+      //
+      // The condition is what makes this safe to ship rather than an outage. The broker's
+      // own vend is a TWO-HOP chain and hop 2 re-assumes this very role, so a blanket Deny
+      // would break every credential AgentsPoppy issues. Hop 1 arrives UNTAGGED, so the key
+      // is absent and the Deny does not apply; every poppy session carries agentspoppy:app
+      // as a TRANSITIVE tag, which cannot be shed by further chaining, so a poppy can never
+      // step outside this condition.
+      Sid: "PoppySessionCannotReAssumeTheBrokerRole",
+      Effect: "Deny",
+      Action: "sts:AssumeRole",
+      Resource: sub(`arn:aws:iam::\${AWS::AccountId}:role/${roleName}`),
+      Condition: { Null: { "aws:PrincipalTag/agentspoppy:app": "false" } },
+    },
+    {
       Sid: "CannotDisableAuditLogging",
       Effect: "Deny",
       Action: AUDIT_GUARDRAIL_ACTIONS,
@@ -186,6 +218,40 @@ export function roleCloudFormationTemplate(input: RoleTemplateInput): object {
     Description:
       "AgentsPoppy bootstrap — a broker role (assumed locally to vend scoped, short-lived credentials to your apps) plus a minimal, NON-admin operator. AgentsPoppy never uses admin: deploy this once, create an access key for the operator, and point AgentsPoppy at it.",
     Resources: {
+      // The ceiling any poppy-CREATED role may ever reach. A poppy that may create roles
+      // named MyPoppy* can otherwise write `*:*` onto one, pass it to a Lambda and invoke
+      // it — that Lambda runs as a NEW principal, so none of the Denies below apply to it,
+      // and the role carries no attribution tag so teardown never sees it. It survives
+      // revoking the connection. A permissions boundary is AWS's own answer: it caps the
+      // role regardless of what policies are later attached, which is also why no Deny on
+      // "attaching a policy that grants *:*" appears below — IAM cannot inspect a policy
+      // document's CONTENTS in a condition, only its ARN.
+      //
+      // DELIBERATELY INERT IN THIS STEP. Nothing requires it yet. A Deny on unbounded
+      // iam:CreateRole would break every poppy that creates roles — three shipping ones do
+      // — because their stacks name no boundary. And a poppy naming a boundary that does
+      // not exist yet fails for the opposite reason. So the policy must EXIST before
+      // anything references it, and nothing may REQUIRE it until everything does.
+      // See docs/specs/broker-role-v2.md.
+      AgentsPoppyBoundary: {
+        Type: "AWS::IAM::ManagedPolicy",
+        Properties: {
+          ManagedPolicyName: BOUNDARY_POLICY_NAME,
+          Description:
+            "AgentsPoppy: the ceiling for any IAM role an app creates in this account. Capped at what the broker role itself may do, minus the guardrails.",
+          PolicyDocument: {
+            Version: "2012-10-17",
+            Statement: [
+              { Sid: "BoundedAccess", Effect: "Allow", Action: "*", Resource: "*" },
+              // The boundary repeats the role's guardrails, because a boundary is evaluated
+              // independently: a Deny written on the broker role does NOT apply to a role
+              // the broker created. Repeating them here is what stops a created role being
+              // used to do the very things the guardrails exist to prevent.
+              ...guardrailStatements(roleName, operatorName),
+            ],
+          },
+        },
+      },
       AgentsPoppyOperator: {
         Type: "AWS::IAM::User",
         Properties: {
@@ -299,6 +365,10 @@ export function roleCloudFormationTemplate(input: RoleTemplateInput): object {
       BrokerRoleArn: {
         Description: "Paste this value into AgentsPoppy to finish connecting the account.",
         Value: { "Fn::GetAtt": ["AgentsPoppyRole", "Arn"] },
+      },
+      TemplateVersion: {
+        Description: "AgentsPoppy uses this to tell you when your broker role needs updating.",
+        Value: String(TEMPLATE_VERSION),
       },
       OperatorUserName: {
         Description:

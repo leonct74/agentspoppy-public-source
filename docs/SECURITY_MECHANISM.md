@@ -312,6 +312,29 @@ gated at all.
 
 ## 7. Change history
 
+- **2026-08-26 (fault A, step 1 of 3)** — groundwork for closing the IAM escalation path.
+  A poppy that may create roles named `MyPoppy*` can write `*:*` onto one, pass it to a
+  Lambda and invoke it; that Lambda runs as a **new principal**, so none of the broker
+  role's Denies reach it, it carries no attribution tag so I4's sweep never sees it, and it
+  **survives revoking the connection**. Three shipping poppies declare that grant
+  legitimately, so a reviewer cannot tell an honest manifest from a hostile one.
+  The template now ships `AgentsPoppyBoundary` — **deliberately inert**: requiring it before
+  every poppy references it would break their deploys, and referencing it before it exists
+  fails the other way, which is why this is three steps. It repeats the guardrails rather
+  than being a bare `Allow *:*`, because a boundary is evaluated independently of the role
+  that created the role. Also added: a `TemplateVersion` output (nothing recorded what was
+  deployed, so "re-apply setup" was a button nobody knew to press) and a Deny on a poppy
+  session re-assuming the broker role — conditioned on the principal already carrying
+  `agentspoppy:app`, because the vend's own second hop re-assumes that role and an
+  unconditioned Deny would break every credential issued.
+  **Two of the spec's three proposed Denies were dropped on contact with the code**: the
+  `agentspoppy:` tag-key Deny is superseded by the compiler-side tag-adoption fix (no
+  re-apply, already shipped) and would have broken CrewPoppy; and "deny attaching a policy
+  that grants `*:*`" is **not expressible** — IAM conditions match a policy's ARN, never its
+  contents. That gap is what the boundary itself closes at step 3.
+  `aws/role-template.ts`, `docs/specs/broker-role-v2.md`. Still to build: version detection
+  and the banner. Steps 2 and 3 need a re-apply from every user.
+
 - **2026-08-26 (canary)** — the tag-adoption rule PROVEN against real AWS, and tightened by
   the run. Both branches pass: a poppy can tag what it creates and re-tag what it owns, and
   cannot claim a resource carrying another app's tag — verified live on EC2 and Cognito, all

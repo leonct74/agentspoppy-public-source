@@ -20,6 +20,7 @@ const PROTECTED = [
   "packages/broker/src/aws/policy.ts",
   "packages/broker/src/aws/policy.test.ts", // the invariants' tripwires — weakening tests IS a mechanism change
   "packages/broker/src/aws/sts.ts",
+  "packages/broker/src/aws/role-template.ts", // the broker role's own guardrails — weakening one is a mechanism change
   "packages/broker/src/aws/tagging.ts",
   "packages/broker/src/aws/deletion.ts",
   "packages/core/src/permissions.ts",

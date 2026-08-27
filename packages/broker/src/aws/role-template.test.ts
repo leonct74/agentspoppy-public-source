@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.0
 
 import { describe, it, expect } from "vitest";
-import { guardrailStatements, roleCloudFormationTemplate, roleTemplateJson, trustPolicy } from "./role-template";
+import { guardrailStatements, roleCloudFormationTemplate, TEMPLATE_VERSION, roleTemplateJson, trustPolicy } from "./role-template";
 
 describe("trustPolicy", () => {
   it("lets the operator's account assume the role and tag the session", () => {
@@ -48,7 +48,12 @@ describe("guardrailStatements", () => {
   });
 
   it("denies disabling CloudTrail audit logging (so a poppy can't blind the activity log)", () => {
-    const audit = guardrailStatements("AgentsPoppyBroker", "AgentsPoppyOperator")[3];
+    // Found BY Sid, not by position: indexing broke the moment a guardrail was inserted
+    // ahead of it, and a positional test on a security guardrail fails for a reason that
+    // has nothing to do with the guardrail.
+    const audit = guardrailStatements("AgentsPoppyBroker", "AgentsPoppyOperator").find(
+      (s) => s.Sid === "CannotDisableAuditLogging",
+    );
     expect(audit?.Sid).toBe("CannotDisableAuditLogging");
     expect(audit?.Effect).toBe("Deny");
     expect(audit?.Action).toContain("cloudtrail:StopLogging");
@@ -96,5 +101,57 @@ describe("roleCloudFormationTemplate", () => {
     // Per-connection scope policies are created within a bounded broker-role session,
     // not by the operator — so the operator stays powerless (assume + monitor only).
     expect(actions.some((a) => a.startsWith("iam:"))).toBe(false);
+  });
+});
+
+// Fault A, step 1 (docs/specs/broker-role-v2.md). A poppy that may create IAM roles can
+// write `*:*` onto one, pass it to a Lambda and invoke it — that Lambda runs as a NEW
+// principal, so none of the broker role's Denies reach it, and the role carries no
+// attribution tag so teardown never sees it. It outlives revoking the connection.
+describe("broker role v2 — the escalation groundwork", () => {
+  const tpl = () => roleCloudFormationTemplate({ operatorAccountId: "111122223333" }) as any;
+
+  it("ships the permissions boundary, so a poppy template can reference it", () => {
+    const b = tpl().Resources.AgentsPoppyBoundary;
+    expect(b.Type).toBe("AWS::IAM::ManagedPolicy");
+    expect(b.Properties.ManagedPolicyName).toBe("AgentsPoppyBoundary");
+  });
+
+  // A boundary is evaluated independently of the role that created the role, so a Deny
+  // written on the broker role does NOT reach a role the broker made. If the boundary did
+  // not repeat them, a created role could do the very things the guardrails exist to stop.
+  it("repeats the guardrails inside the boundary, not just the wide allow", () => {
+    const sids = tpl().Resources.AgentsPoppyBoundary.Properties.PolicyDocument.Statement.map(
+      (s: any) => s.Sid,
+    );
+    for (const guard of ["CannotManageIamUsersOrAccount", "CannotTamperWithAgentsPoppy", "CannotDisableAuditLogging"]) {
+      expect(sids, guard).toContain(guard);
+    }
+  });
+
+  // Step 1 must break nothing. A Deny on unbounded CreateRole would stop three shipping
+  // poppies deploying; the boundary only becomes mandatory once every poppy references it.
+  it("does NOT yet require the boundary — nothing may depend on it in this step", () => {
+    const json = JSON.stringify(tpl());
+    expect(json).not.toContain("iam:PermissionsBoundary");
+  });
+
+  it("surfaces a template version, so the app can tell a user theirs is stale", () => {
+    expect(tpl().Outputs.TemplateVersion.Value).toBe(String(TEMPLATE_VERSION));
+    expect(TEMPLATE_VERSION).toBeGreaterThanOrEqual(2);
+  });
+
+  // The broker's OWN vend is a two-hop chain whose second hop re-assumes this very role, so
+  // an unconditioned Deny here would break every credential AgentsPoppy issues. Hop 1
+  // arrives untagged; every poppy session carries agentspoppy:app transitively and so can
+  // never step outside the condition.
+  it("stops a poppy session re-assuming the broker role, without breaking hop 2", () => {
+    const deny = guardrailStatements("AgentsPoppyBroker", "AgentsPoppyOperator").find(
+      (s) => s.Sid === "PoppySessionCannotReAssumeTheBrokerRole",
+    )!;
+    expect(deny.Effect).toBe("Deny");
+    expect(deny.Action).toBe("sts:AssumeRole");
+    // "the tag is NOT null" — i.e. only a session already carrying it is denied.
+    expect(deny.Condition).toEqual({ Null: { "aws:PrincipalTag/agentspoppy:app": "false" } });
   });
 });
