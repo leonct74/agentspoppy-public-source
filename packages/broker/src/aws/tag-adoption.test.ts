@@ -42,16 +42,29 @@ describe("a tag write on an unnarrowed scope is conditioned, not blanket", () =>
     }
   });
 
-  // The claim path: you may stamp yourself on something nobody has claimed.
-  it("allows claiming only something not already claimed, with your own tag", () => {
-    const claim = byId(cognitoUnbounded, "TagOnCreate")!;
+  // PROVEN LIVE (canary, 26 Aug 2026) that cognito needs NO claim statement: AWS populates
+  // aws:ResourceTag with the SUBMITTED tags during a tag-on-create, so the re-tag-your-own
+  // statement authorises the create by itself. A claim statement would add exactly one
+  // thing — the ability to take over an UNTAGGED resource — which the same run confirmed
+  // was possible. Emitting one here would re-open a gap for no gain.
+  it("emits NO claim statement for a service proven not to need one", () => {
+    expect(byId(cognitoUnbounded, "TagOnCreate")).toBeUndefined();
+    expect(byId(cognitoUnbounded, "TagOwn")).toBeDefined();
+  });
+
+  // …but a service that has NOT been proven keeps the weaker shape, because being wrong
+  // there means a real deploy stops working. guardduty and amplify are deliberately here.
+  it("still emits the claim statement for a service not yet proven", () => {
+    const gd: PermissionGrant = {
+      service: "guardduty",
+      actions: ["CreateMalwareProtectionPlan", "TagResource"],
+      resourceScope: "*",
+    };
+    const claim = stmts(gd).find((s) => s.Sid === "Grant0TagOnCreate")!;
     expect(claim.Condition).toEqual({
       StringEquals: { "aws:RequestTag/agentspoppy:app": APP },
       Null: { "aws:ResourceTag/agentspoppy:app": "true" },
     });
-    // The attack is refused by the Null clause: MailPoppy's pool already carries
-    // agentspoppy:app, so it is not null, and this statement cannot authorise it.
-    expect(claim.Condition!.Null).toBeDefined();
   });
 
   // THE REGRESSION THAT WOULD BREAK EVERY RELEASE. CloudFormation issues tag updates as

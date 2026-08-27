@@ -312,6 +312,16 @@ gated at all.
 
 ## 7. Change history
 
+- **2026-08-26 (canary)** — the tag-adoption rule PROVEN against real AWS, and tightened by
+  the run. Both branches pass: a poppy can tag what it creates and re-tag what it owns, and
+  cannot claim a resource carrying another app's tag — verified live on EC2 and Cognito, all
+  fixtures deleted afterwards. The run also overturned a documented assumption: AWS populates
+  `aws:ResourceTag` with the SUBMITTED tags during a tag-on-create, so for Cognito the
+  claim-if-unclaimed statement never authorised a single create. Its only effect was to
+  permit claiming an UNTAGGED resource, which the same run confirmed worked. Removed:
+  Cognito now has **no residual gap**, matching EC2. guardduty and amplify keep the weaker
+  shape until each has had the same run. `aws/policy.ts`,
+  `docs/specs/tag-adoption-canary.md`.
 - **2026-08-26** — tag adoption closed in the compiler (`docs/specs/tag-adoption.md`).
   I2 says an app may touch only what carries its own tag; six of seven shipped poppies
   could also WRITE that tag on every resource of some type, so the guarantee was

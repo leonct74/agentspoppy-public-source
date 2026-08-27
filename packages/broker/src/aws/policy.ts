@@ -87,10 +87,17 @@ interface TagWriteRules {
   remove: string[];
   /**
    * `create-action` — the service can prove the tag write is part of a create call, so the
-   * standalone claim path is removed entirely (no residual gap).
-   * `request-tag`  — the best available: claim only something not already claimed.
+   *                   standalone claim path is removed entirely. No residual gap.
+   * `none`          — PROVEN, per service, that AWS populates `aws:ResourceTag` with the
+   *                   SUBMITTED tags during a tag-on-create. The re-tag-your-own statement
+   *                   therefore authorises creates on its own, and a claim statement would
+   *                   add nothing except the ability to claim an untagged resource. Also
+   *                   no residual gap.
+   * `request-tag`   — not yet proven for this service. Claim only something not already
+   *                   claimed. Works, but LEAVES A RESIDUAL: a resource the user created
+   *                   by hand carries no attribution tag and so counts as unclaimed.
    */
-  claim: "create-action" | "request-tag";
+  claim: "create-action" | "request-tag" | "none";
 }
 
 const TAG_WRITE_RULES: Record<string, TagWriteRules> = {
@@ -99,7 +106,18 @@ const TAG_WRITE_RULES: Record<string, TagWriteRules> = {
   // permitted to tag any existing resources". It is NOT listed on DeleteTags (a delete is
   // never part of a create), so it must never be applied there.
   ec2: { add: ["CreateTags"], remove: ["DeleteTags"], claim: "create-action" },
-  "cognito-idp": { add: ["TagResource"], remove: ["UntagResource"], claim: "request-tag" },
+  // PROVEN live (canary, 26 Aug 2026): a pool created WITH tags succeeds under a policy
+  // carrying NO claim statement, so aws:ResourceTag really is populated with the submitted
+  // tags during the dependent TagResource check. The claim statement was therefore doing
+  // nothing for creates — its only remaining effect was to permit claiming an UNTAGGED
+  // pool, which the same run confirmed was possible. Dropping it closes that gap at no
+  // cost. See docs/specs/tag-adoption-canary.md.
+  "cognito-idp": { add: ["TagResource"], remove: ["UntagResource"], claim: "none" },
+  // NOT yet proven, so left on the weaker shape deliberately. The AWS global condition-key
+  // reference implies the same behaviour ("…or in requests that create a resource with an
+  // attached tag"), and if it holds these become `none` too — but "implies" is exactly what
+  // the canary was built to stop trusting, and being wrong here means MailPoppy or
+  // HostingPoppy stops deploying. Each needs its own canary run before it moves.
   guardduty: { add: ["TagResource"], remove: ["UntagResource"], claim: "request-tag" },
   amplify: { add: ["TagResource"], remove: ["UntagResource"], claim: "request-tag" },
 };
@@ -271,8 +289,11 @@ export function statementForGrant(grant: PermissionGrant, appId: string, index: 
     statements.push({ Sid: `Grant${index}`, Effect: "Allow", Action: rest, Resource: grant.resourceScope });
   }
 
-  // Claiming. Two shapes, and the difference is how much they leave open.
-  if (adds.length > 0) {
+  // Claiming. Three shapes, and the difference is how much each leaves open.
+  // `none` emits nothing here at all: the re-tag-your-own statement below already
+  // authorises tag-on-create for these services, so a claim statement would only add the
+  // ability to take over something untagged.
+  if (adds.length > 0 && rules.claim !== "none") {
     if (rules.claim === "create-action") {
       // The strong one: the tag write is authorised only as the tagging half of a create
       // the poppy is making itself, so a pre-existing resource can never be claimed at
