@@ -276,13 +276,19 @@ export function ConnectAwsView({ accounts, onBack, onChanged, initialAction }: C
       const pasteKeys = useOwnKeys || !hasIdentity;
       const { brokerRoleArn, joinedExistingSetupIn, setupNotUpdated, evictedAccessKeyId } = await broker.deployBootstrap(
         account?.id ?? null,
+        // On a re-apply the run must touch the STACK only. Without updateOnly it also rotated
+        // the operator key and overwrote this machine's working credential — the user returned
+        // from a successful security update disconnected (field report 2026-08-28).
         pasteKeys
           ? {
               accessKeyId: setupKeyId.trim(),
               secretAccessKey: setupKeySecret.trim(),
               sessionToken: setupKeyToken.trim() || undefined,
+              ...(redeploy ? { updateOnly: true } : {}),
             }
-          : undefined,
+          : redeploy
+            ? { updateOnly: true }
+            : undefined,
       );
       // Any pasted setup creds are done with — drop them from the form too.
       setSetupKeySecret("");

@@ -312,6 +312,8 @@ export const broker = {
       sessionToken?: string;
       /** Fresh-machine (accountId null) only: where the setup should live. */
       region?: string;
+      /** Re-apply: touch the stack only — never rotate the stored credential. */
+      updateOnly?: boolean;
     },
   ) =>
     req<{

@@ -53,6 +53,16 @@ export interface BootstrapInput {
   region: string;
   /** If set, the run aborts unless the setup creds belong to this AWS account. */
   expectedAccountId?: string;
+  /**
+   * An UPDATE touches the stack and nothing else. Without this, a re-apply ran the full
+   * onboarding reconciliation afterwards: it minted a fresh operator key, overwrote the
+   * machine's working credential with it, and evicted the oldest key to stay under IAM's
+   * 2-key limit — so the user came back from a successful security update DISCONNECTED
+   * (the new key takes seconds to go live) and possibly broke another machine. Field
+   * report 2026-08-28. Ignored when the stack had to be CREATED: a new stack means a new
+   * operator user, whose key genuinely must be minted.
+   */
+  updateOnly?: boolean;
 }
 
 export interface BootstrapResult {
@@ -60,8 +70,9 @@ export interface BootstrapResult {
   accountId: string;
   brokerRoleArn: string;
   operatorUserName: string;
-  /** The freshly minted operator key id (the secret is written to the profile, not returned). */
-  operatorAccessKeyId: string;
+  /** The freshly minted operator key id (the secret is written to the profile, not returned).
+   *  Absent on an update-only run: no key was minted, nothing on disk was touched. */
+  operatorAccessKeyId?: string;
   /**
    * Set when this machine reused (joined) a setup that lives in another region —
    * nothing was created; this machine just received its own operator key.
@@ -198,7 +209,7 @@ export async function runBootstrap(
 
   // 1) Ensure the stack exists and is complete (resumable). If the setup already
   //    lives in ANOTHER region, this JOINS it (second computer) instead of failing.
-  const { stack, joinedRegion, notUpdated } = await ensureStack(
+  const { stack, joinedRegion, notUpdated, created } = await ensureStack(
     gw,
     who.accountId,
     who.arn,
@@ -211,6 +222,18 @@ export async function runBootstrap(
   const operatorUserName = stack.outputs.OperatorUserName ?? DEFAULT_OPERATOR_NAME;
   if (!brokerRoleArn) {
     throw new Error("The setup stack completed but did not return a Broker Role ARN.");
+  }
+
+  // Update-only, and the operator user survived: the machine's working credential stays
+  // exactly as it is. Rotating it here is what disconnected a user mid-update.
+  if (input.updateOnly && !created) {
+    return {
+      accountId: who.accountId,
+      brokerRoleArn,
+      operatorUserName,
+      ...(joinedRegion ? { joinedExistingSetupIn: joinedRegion } : {}),
+      ...(notUpdated ? { setupNotUpdated: true } : {}),
+    };
   }
 
   // 2) Reconcile the operator access key — MULTI-DEVICE SAFE. The secret is shown
@@ -435,7 +458,7 @@ async function ensureStack(
   sleep: (ms: number) => Promise<void>,
   pollMs: number,
   maxPolls: number,
-): Promise<{ stack: DescribedStack; joinedRegion?: string; notUpdated?: boolean }> {
+): Promise<{ stack: DescribedStack; joinedRegion?: string; notUpdated?: boolean; created?: boolean }> {
   let s = await gw.describeStack();
 
   // Mid-flight from a previous attempt → wait for it to settle.
@@ -486,6 +509,7 @@ async function ensureStack(
       throw err;
     }
     s = await waitSettled(gw, sleep, pollMs, maxPolls);
+    if (s && COMPLETE.has(s.status)) return { stack: s, created: true };
   } else if (COMPLETE.has(s.status)) {
     try {
       await gw.updateStack(roleTemplateJson({ operatorAccountId: accountId }));

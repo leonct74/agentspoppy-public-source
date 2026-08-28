@@ -460,3 +460,60 @@ describe("re-applying when the setup stack lives in another region", () => {
     ).rejects.toThrow(/rolled back/i);
   });
 });
+
+// The 2026-08-28 field report: a successful re-apply came back with the user DISCONNECTED,
+// because the update path ran onboarding's key reconciliation afterwards — minted a fresh
+// operator key, overwrote the machine's working profile with it (a just-minted IAM key takes
+// seconds to go live), and evicted the oldest key, potentially breaking another machine.
+describe("update-only runs touch the stack and nothing else", () => {
+  it("updates without minting, deleting, or writing any credential", async () => {
+    const written: AwsKeyInput[] = [];
+    const gw = fakeGateway({ initialStacks: [COMPLETE], existingKeyIds: ["AKIAOLD1", "AKIAOLD2"] });
+    const res = await runBootstrap(
+      gw,
+      { setup: SETUP, region: "eu-west-1", updateOnly: true },
+      { ...baseOpts, writeProfile: (k) => written.push(k) },
+    );
+    expect(gw.log).toContain("updateStack");
+    expect(res.brokerRoleArn).toContain("AgentsPoppyBroker");
+    expect(res.operatorAccessKeyId).toBeUndefined();
+    expect(gw.created).toHaveLength(0); // no key minted
+    expect(gw.deletedKeys).toEqual([]); // nothing evicted
+    expect(written).toHaveLength(0); // the machine's stored credential is untouched
+  });
+
+  // The one legitimate exception: the stack had to be CREATED, so the operator user is brand
+  // new and a key genuinely must be minted or the machine ends up with a dead credential.
+  it("still mints when the run had to create the stack", async () => {
+    const written: AwsKeyInput[] = [];
+    const gw = fakeGateway({ initialStacks: [null], existingNamed: { role: false, user: false } });
+    const res = await runBootstrap(
+      gw,
+      { setup: SETUP, region: "eu-west-1", updateOnly: true },
+      { ...baseOpts, writeProfile: (k) => written.push(k) },
+    );
+    expect(gw.log).toContain("createStack");
+    expect(res.operatorAccessKeyId).toBeTruthy();
+    expect(written).toHaveLength(1);
+  });
+
+  it("skips the key phase on a cross-region re-apply too", async () => {
+    const gw = fakeGateway({
+      initialStacks: [null],
+      existingNamed: { role: true, user: true },
+      originRegion: "us-east-1",
+      originStack: COMPLETE,
+      existingKeyIds: ["AKIAMAC"],
+    });
+    const written: AwsKeyInput[] = [];
+    const res = await runBootstrap(
+      gw,
+      { setup: SETUP, region: "eu-west-1", updateOnly: true },
+      { ...baseOpts, writeProfile: (k) => written.push(k) },
+    );
+    expect(gw.log).toContain("updateStackInRegion:us-east-1");
+    expect(res.joinedExistingSetupIn).toBe("us-east-1");
+    expect(written).toHaveLength(0);
+    expect(gw.deletedKeys).toEqual([]);
+  });
+});

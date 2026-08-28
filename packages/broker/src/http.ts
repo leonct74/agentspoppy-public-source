@@ -198,9 +198,9 @@ export async function handle(
       // creds (in-memory only, never persisted). Idempotent / resumable.
       if (parts[2] === "bootstrap" && method === "POST") {
         const b = (await readJsonBody(req)) as
-          | { accessKeyId?: string; secretAccessKey?: string; sessionToken?: string }
+          | { accessKeyId?: string; secretAccessKey?: string; sessionToken?: string; updateOnly?: boolean }
           | undefined;
-        return send(res, 200, await service.deployBootstrap(id, setupFromBody(b)));
+        return send(res, 200, await service.deployBootstrap(id, setupFromBody(b), undefined, b?.updateOnly === true));
       }
       if (parts[2] === "role" && method === "POST") {
         const b = (await readJsonBody(req)) as { roleArn?: string } | undefined;

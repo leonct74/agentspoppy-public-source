@@ -228,7 +228,9 @@ describe("ConnectAwsView", () => {
 
     await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith("/bootstrap"))).toBe(true));
     const bootstrap = fetchMock.mock.calls.find(([u]) => String(u).endsWith("/bootstrap"))!;
-    expect(JSON.parse(String((bootstrap[1] as RequestInit).body))).toEqual({}); // reused the connected creds
+    // Reused the connected creds (no keys posted) — AND declared itself update-only, so the
+    // broker touches the stack without rotating the credential this machine runs on.
+    expect(JSON.parse(String((bootstrap[1] as RequestInit).body))).toEqual({ updateOnly: true });
   });
 
   it("lets an already-connected user reveal the key form to change AWS credentials", async () => {

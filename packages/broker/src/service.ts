@@ -203,6 +203,8 @@ export class BrokerService {
     /** Fresh-machine only: where the setup should live (the wizard's region choice).
      *  Ignored when an account is already linked — you can't move a setup by re-running it. */
     regionOverride?: string,
+    /** Re-apply: touch the stack only — never rotate the operator key or the local profile. */
+    updateOnly?: boolean,
   ): Promise<{
     brokerRoleArn: string;
     account: ConnectedAccount;
@@ -232,8 +234,14 @@ export class BrokerService {
     const region = existing
       ? regionFor(existing)
       : regionOverride?.trim() || process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || "us-east-1";
-    const result = await this.aws.deployBootstrap({ setup, region, expectedAccountId: existing?.accountId });
-    this.operatorIdCache = null; // bootstrap writes a fresh operator key = new identity
+    const result = await this.aws.deployBootstrap({
+      setup,
+      region,
+      expectedAccountId: existing?.accountId,
+      ...(updateOnly ? { updateOnly: true } : {}),
+    });
+    // An update-only run never touches credentials, so the cached identity stays valid.
+    if (!updateOnly) this.operatorIdCache = null;
 
     // Upsert: the linked account, else one already matching this AWS account, else a fresh row.
     const target = existing ?? accounts.find((a) => a.accountId === result.accountId) ?? null;
