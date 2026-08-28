@@ -204,10 +204,20 @@ gate(
 );
 const bundledPolicy = readFileSync(`${appDir}/src/assets/access-policy.json`, "utf8");
 const sourcePolicy = readFileSync(`${appDir}/../infra/policies/agentspoppy-access-policy.json`, "utf8");
+// BYTE equality, not JSON equality. A semantic compare passed while the two files differed
+// in whitespace — so the app's Copy button produced a 161-line policy and GitHub showed a
+// 150-line one, and a careful user reasonably concluded one of them must be wrong
+// (2026-08-28). The exact bytes are part of the product for a security-conscious audience:
+// the file is canonical JSON.stringify(…, null, 2), which is also what the Copy button emits.
 gate(
-  "policy: the copy-button's bundled policy matches infra/policies",
-  JSON.stringify(JSON.parse(bundledPolicy)) === JSON.stringify(JSON.parse(sourcePolicy)),
+  "policy: the copy-button's bundled policy matches infra/policies byte-for-byte",
+  bundledPolicy === sourcePolicy,
   "re-copy infra/policies/agentspoppy-access-policy.json → app/src/assets/access-policy.json",
+);
+gate(
+  "policy: the file is in canonical form (so the Copy button's output matches it)",
+  bundledPolicy === JSON.stringify(JSON.parse(bundledPolicy), null, 2) + "\n",
+  "run: node -e 'const f=\"infra/policies/agentspoppy-access-policy.json\",fs=require(\"fs\");fs.writeFileSync(f,JSON.stringify(JSON.parse(fs.readFileSync(f,\"utf8\")),null,2)+\"\\n\")' and re-copy",
 );
 
 // A link that RESOLVES can still be wrong. The gate above this one was written after v0.3.2
@@ -223,7 +233,7 @@ const publishedPolicy = sh("curl", ["-sL", "--max-time", "25", POLICY_RAW_URL]).
 let publishedMatches = false;
 let publishedNote = "";
 try {
-  publishedMatches = JSON.stringify(JSON.parse(publishedPolicy)) === JSON.stringify(JSON.parse(bundledPolicy));
+  publishedMatches = publishedPolicy + "\n" === bundledPolicy || publishedPolicy === bundledPolicy;
   if (!publishedMatches) {
     const sids = (p) => new Set(JSON.parse(p).Statement.map((st) => st.Sid));
     const missing = [...sids(bundledPolicy)].filter((x) => !sids(publishedPolicy).has(x));

@@ -336,6 +336,115 @@ describe("ConnectAwsView", () => {
     expect(screen.queryByText("Update your AWS policy.")).toBeNull();
   });
 
+  // Field report: pressing "Update setup" landed on five ticked-off steps and a Verify
+  // button, with the credential form hidden behind a text link — so the obvious action did
+  // nothing and the real one was invisible.
+  describe("arriving from the staleness banner", () => {
+    const operator = { accountId: "123456789012", arn: "arn:aws:iam::123456789012:user/AgentsPoppyOperator", userId: "U" };
+    const renderRedeploy = (identity: typeof operator) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) =>
+          url.endsWith("/aws/identity") ? jsonResponse(identity) : jsonResponse({}, 404),
+        ),
+      );
+      const linked = { ...account, roleArn: "arn:aws:iam::123456789012:role/AgentsPoppyBroker" };
+      render(<ConnectAwsView accounts={[linked]} onBack={() => {}} onChanged={() => {}} initialAction="redeploy" />);
+    };
+
+    // The update is its OWN screen now, not the onboarding wizard wearing a banner: no step
+    // list, no "Create the broker role" heading, no Verify button to press by mistake.
+    it("is a dedicated update screen, not the onboarding wizard", async () => {
+      renderRedeploy(operator);
+      expect(await screen.findByRole("heading", { name: /Update your AgentsPoppy setup/i })).toBeTruthy();
+      expect(screen.getByText(/Update the protections in your AWS account/i)).toBeTruthy();
+      expect(screen.queryByText(/Create the broker role \+ operator/i)).toBeNull();
+      expect(screen.queryByRole("button", { name: /Verify connection/i })).toBeNull();
+      expect(screen.queryByText(/Connect your AWS/i)).toBeNull();
+    });
+
+    // Field lesson (2026-08-28): the least-privilege user's real task — replace the policy on
+    // their setup IAM user — surfaced only in an error message AFTER a rollback. The banner
+    // must state it up front: what to do, where the policy is, and why it changed.
+    it("leads with the policy replacement: the what, the where, and the why", async () => {
+      renderRedeploy(operator);
+      await screen.findByText(/Update the protections in your AWS account/i);
+      // what — replace the policy before deploying
+      expect(screen.getByText(/replace that policy with the current\s+version/i)).toBeTruthy();
+      // where — the copy button and the console path
+      expect(screen.getByRole("button", { name: /copy the policy/i })).toBeTruthy();
+      expect(screen.getByText(/IAM → Users → your setup user/i)).toBeTruthy();
+      // why — the new safeguard the permission exists for
+      expect(screen.getAllByText(/AgentsPoppyBoundary/i).length).toBeGreaterThan(0);
+      expect(screen.getByText(/caps any IAM role a connected app creates/i)).toBeTruthy();
+    });
+
+    // The credential AgentsPoppy keeps is the powerless operator, so the "use what you already
+    // connected" button offers the ONE key that cannot work. Go straight to the form.
+    it("shows the key fields directly when the held credential is the operator", async () => {
+      renderRedeploy(operator);
+      expect(await screen.findByLabelText(/Access Key ID/i)).toBeTruthy();
+      expect(screen.queryByRole("button", { name: /Use different credentials for this step/i })).toBeNull();
+    });
+
+    it("explains why a key must be pasted at all", async () => {
+      renderRedeploy(operator);
+      expect(await screen.findByText(/cannot\s+modify the setup/i)).toBeTruthy();
+    });
+
+    // An admin identity CAN do the update, so the one-click path stays.
+    it("keeps the one-click path when the connected identity is not the operator", async () => {
+      renderRedeploy({ ...operator, arn: "arn:aws:iam::123456789012:user/admin" });
+      expect(await screen.findByRole("button", { name: "Use different credentials for this step" })).toBeTruthy();
+    });
+
+    // Field report (2026-08-28): step 3 said "enter the key below" unconditionally, so a user
+    // whose STORED key was perfectly capable went hunting for a secret they never needed to
+    // re-type. When the app holds a usable key, the banner must say it is reused.
+    it("tells a capable-key user there is nothing to re-enter, never to enter a key", async () => {
+      renderRedeploy({ ...operator, arn: "arn:aws:iam::123456789012:user/my-setup-user" });
+      await screen.findByText(/Update the protections in your AWS account/i);
+      expect(screen.getAllByText(/nothing to re-enter/i).length).toBeGreaterThan(0);
+      expect(screen.queryByText(/Enter the key below/i)).toBeNull();
+    });
+
+    it("ends in an update-complete state, not back in the onboarding layout", async () => {
+      const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.includes("/bootstrap") && init?.method === "POST") {
+          return jsonResponse({
+            brokerRoleArn: "arn:aws:iam::123456789012:role/AgentsPoppyBroker",
+            account: { ...account, roleArn: "arn:aws:iam::123456789012:role/AgentsPoppyBroker" },
+          });
+        }
+        if (url.endsWith("/aws/identity")) {
+          return jsonResponse({ accountId: "123456789012", arn: "arn:aws:iam::123456789012:user/admin", userId: "U" });
+        }
+        return jsonResponse({}, 404);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const onBack = vi.fn();
+      const linked = { ...account, roleArn: "arn:aws:iam::123456789012:role/AgentsPoppyBroker" };
+      render(<ConnectAwsView accounts={[linked]} onBack={onBack} onChanged={() => {}} initialAction="redeploy" />);
+
+      // Wait for the reuse panel (identity resolved) — before that, the paste form's
+      // disabled Deploy button is what findByRole would grab.
+      await screen.findByRole("button", { name: "Use different credentials for this step" });
+      fireEvent.click(screen.getByRole("button", { name: "Deploy setup" }));
+      await screen.findByText(/current protections/i);
+      // Success must NOT drop the user back into "Setup complete" + Verify.
+      expect(screen.queryByRole("button", { name: /Verify connection/i })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Done" }));
+      expect(onBack).toHaveBeenCalled();
+    });
+
+    it("still tells the operator-key user to enter a key (theirs cannot do the job)", async () => {
+      renderRedeploy(operator);
+      await screen.findByText(/Update the protections in your AWS account/i);
+      expect(screen.getByText(/Enter the key below/i)).toBeTruthy();
+      expect(screen.queryAllByText(/nothing to re-enter/i)).toHaveLength(0);
+    });
+  });
+
   it("update-policy: shows the current policy link + replace instructions and a working Re-check", async () => {
     const denial =
       "User: arn:aws:iam::123456789012:user/acmepoppy-3 is not authorized to perform: sts:AssumeRole on resource: arn:aws:iam::123456789012:role/AgentsPoppyBroker";

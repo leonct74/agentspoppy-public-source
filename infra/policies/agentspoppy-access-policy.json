@@ -4,7 +4,9 @@
     {
       "Sid": "WhoAmI",
       "Effect": "Allow",
-      "Action": ["sts:GetCallerIdentity"],
+      "Action": [
+        "sts:GetCallerIdentity"
+      ],
       "Resource": "*"
     },
     {
@@ -30,7 +32,10 @@
     {
       "Sid": "ValidateTemplate",
       "Effect": "Allow",
-      "Action": ["cloudformation:ValidateTemplate", "cloudformation:GetTemplateSummary"],
+      "Action": [
+        "cloudformation:ValidateTemplate",
+        "cloudformation:GetTemplateSummary"
+      ],
       "Resource": "*"
     },
     {
@@ -90,13 +95,19 @@
     {
       "Sid": "CreateOperatorAccessKey",
       "Effect": "Allow",
-      "Action": ["iam:CreateAccessKey", "iam:ListAccessKeys", "iam:DeleteAccessKey"],
+      "Action": [
+        "iam:CreateAccessKey",
+        "iam:ListAccessKeys",
+        "iam:DeleteAccessKey"
+      ],
       "Resource": "arn:aws:iam::*:user/AgentsPoppyOperator"
     },
     {
       "Sid": "AssumeBrokerRole",
       "Effect": "Allow",
-      "Action": ["sts:AssumeRole"],
+      "Action": [
+        "sts:AssumeRole"
+      ],
       "Resource": "arn:aws:iam::*:role/AgentsPoppyBroker"
     },
     {

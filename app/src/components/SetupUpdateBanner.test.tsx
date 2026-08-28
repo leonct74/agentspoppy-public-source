@@ -45,8 +45,11 @@ describe("SetupUpdateBanner", () => {
     // The point, in the user's terms: protections added since then are NOT in place.
     expect(screen.getByText(/isn't actually in place/i)).toBeTruthy();
     expect(screen.getByText(/setup version 1/i)).toBeTruthy();
-    // Never spring the credential requirement on them after they've started.
-    expect(screen.getByText(/admin AWS keys once/i)).toBeTruthy();
+    // Never spring the credential requirement on them after they've started — and name BOTH
+    // paths: admin keys, or the access-policy user with the policy brought up to date. Saying
+    // only "admin keys" sent a least-privilege user hunting for credentials they don't have.
+    expect(screen.getByText(/setup credentials once/i)).toBeTruthy();
+    expect(screen.getByText(/access\s+policy/i)).toBeTruthy();
   });
 
   // Crying wolf is how a security banner gets trained out of a user. A check that

@@ -104,11 +104,24 @@ export function ConnectAwsView({ accounts, onBack, onChanged, initialAction }: C
    * "access policy", which the (unrelated) wrong-credentials message also contains.
    */
   const stalePolicyError = !!deployError && /iam:CreatePolicy/i.test(deployError);
+
   // "Reused your existing setup" note after a cross-region join (second computer).
   const [deployNote, setDeployNote] = useState<string | null>(null);
   // Re-run the deploy on an ALREADY-set-up account (e.g. to apply a tightened role
   // guardrail). The bootstrap reconcile updates the existing stack in place.
   const [redeploy, setRedeploy] = useState(false);
+  // A finished update stays on the update screen showing its result — it must not fall
+  // back into the onboarding layout it just proved confusing.
+  const [updateDone, setUpdateDone] = useState(false);
+  /**
+   * The everyday credential AgentsPoppy holds is the NON-ADMIN operator user, and it is
+   * deliberately powerless to modify the setup — that is the property that stops a connected
+   * app rewriting its own guardrails. So on a re-apply, offering "use the credentials you
+   * already connected" as the primary button offers the one credential that CANNOT work, and
+   * buries the real path behind a text link. Detect it and go straight to the key form.
+   */
+  const connectedIsOperator = !!identity?.arn?.includes(":user/AgentsPoppyOperator");
+  const mustPasteForRedeploy = redeploy && connectedIsOperator;
 
   const probe = useCallback(() => {
     setChecking(true);
@@ -292,7 +305,8 @@ export function ConnectAwsView({ accounts, onBack, onChanged, initialAction }: C
         );
       }
       setRoleArn(brokerRoleArn);
-      setRedeploy(false); // re-apply done → back to the "setup complete" state
+      if (redeploy) setUpdateDone(true); // stay on the update screen, showing the result
+      else setRedeploy(false);
       onChanged(); // pull the account back with its new roleArn
       // Deliberately do NOT re-probe identity here: the operator key was just created
       // and can take a second or two to go active (IAM eventual consistency). A probe
@@ -324,7 +338,7 @@ export function ConnectAwsView({ accounts, onBack, onChanged, initialAction }: C
   const states: StepState[] = [
     hasIdentity ? "done" : "active",
     hasAccount ? "done" : hasIdentity ? "active" : "locked",
-    hasRole ? "done" : hasAccount ? "active" : "locked",
+    hasRole && !redeploy ? "done" : hasAccount ? "active" : "locked",
     hasRole ? "done" : hasAccount ? "active" : "locked",
     // Verifying the connection needs working operator credentials, so if they've lapsed
     // (step 1 not done) keep this LOCKED — otherwise a reconnect shows two "active" steps
@@ -348,6 +362,294 @@ export function ConnectAwsView({ accounts, onBack, onChanged, initialAction }: C
         onProSwitch={() => setMode("pro")}
         completedHandsOffToPro={!wizardExplicit}
       />
+    );
+  }
+
+  const updateBanner = (
+<div className="banner banner-warn policy-update">
+          <strong>Update the protections in your AWS account.</strong> This version adds a new
+          safeguard — a permissions boundary named <code>AgentsPoppyBoundary</code>, a ceiling that
+          caps any IAM role a connected app creates, so an app can never build itself more power
+          than your rules allow. The protections live in your account, not in this app, so they
+          change only when you re-apply them. Your account, role, region and connected apps all
+          stay exactly as they are — nothing is recreated.
+          {/* The single most important instruction goes FIRST, and it depends on how the user set
+              up. Field lesson (2026-08-28): the access-policy path was buried in an error message
+              after a rollback, so the user did the doomed thing first and read the real
+              requirement last. */}
+          <ol className="substeps">
+            <li>
+              <strong>If your setup key is an IAM user carrying the AgentsPoppy access policy</strong>{" "}
+              (the recommended non-admin path): first <strong>replace that policy with the current
+              version</strong> — this update needs one new permission (<code>iam:CreatePolicy</code>,
+              scoped to the single policy named <code>AgentsPoppyBoundary</code>) that older copies
+              don't grant. <CopyPolicyButton /> — or{" "}
+              <ExtLink href={ACCESS_POLICY_URL}>
+                open it on GitHub <Icon name="external" className="link-ext" />
+              </ExtLink>
+              . In AWS: <strong>IAM → Users → your setup user</strong> → open the AgentsPoppy
+              policy → <strong>replace</strong> it with what you copied → save. Then come back here.
+            </li>
+            <li>
+              <strong>If you use your admin keys for setup:</strong> nothing to prepare — they
+              already may do this.
+            </li>
+            <li>
+              {/* Never tell someone to enter a key the app can already use. The stored key IS
+                  reused — typing is only for when the stored key is the powerless operator (or
+                  none resolves). Field report 2026-08-28: this said "enter the key below"
+                  unconditionally, so a user whose stored key was perfectly capable went hunting
+                  for a secret they never needed to re-type. */}
+              {hasIdentity && !connectedIsOperator ? (
+                <>
+                  Press <strong>Deploy setup</strong> — AgentsPoppy uses the key it already has
+                  {identity ? (
+                    <>
+                      {" "}
+                      (<code>{identity.arn}</code>)
+                    </>
+                  ) : null}
+                  , so there is <strong>nothing to re-enter</strong>. The update takes a few
+                  seconds.
+                </>
+              ) : (
+                <>
+                  Enter the key below and press <strong>Deploy setup</strong>. It is used once,
+                  held in memory, never written to disk, and the update takes a few seconds.
+                </>
+              )}
+            </li>
+          </ol>
+          {connectedIsOperator && (
+            <p className="muted">
+              Why enter a key when AgentsPoppy already has one? Because the key it keeps is{" "}
+              <code>AgentsPoppyOperator</code> — a deliberately powerless user that <strong>cannot
+              modify the setup</strong>. That is exactly what stops a connected app rewriting its own
+              guardrails, so it is a property worth the extra step rather than a gap.
+            </p>
+          )}
+        </div>
+  );
+
+  const updatePolicyPanel = (
+<div className="banner banner-warn policy-update">
+          <strong>Update your AWS policy.</strong> AgentsPoppy needs a permission your IAM user's current policy
+          doesn't grant — this happens when an update adds one. Replace the policy with the latest and you're done:
+          your account, role and region all stay exactly as they are.
+          <ol className="substeps">
+            <li>
+              <CopyPolicyButton /> — or{" "}
+              <ExtLink href={ACCESS_POLICY_URL}>
+                open it on GitHub <Icon name="external" className="link-ext" />
+              </ExtLink>
+              .
+            </li>
+            <li>
+              In AWS: <strong>IAM → Users → your user</strong> → open the AgentsPoppy policy, <strong>replace</strong>{" "}
+              it with what you copied, and save.
+            </li>
+            <li>
+              Come back and press <strong>Re-check</strong>.
+            </li>
+          </ol>
+          <div className="policy-update__actions">
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={busy || !account}
+              onClick={() => void run(async () => setVerify(await broker.verifyAccount(account!.id)))}
+            >
+              {busy ? "Checking…" : "Re-check"}
+            </button>
+            {verify?.ok ? (
+              <span className="ok">
+                <Icon name="check" /> Access restored — you're all set.
+              </span>
+            ) : verify && !verify.ok ? (
+              <span className="micro muted">Still blocked — save the policy on your IAM user, then try again.</span>
+            ) : null}
+          </div>
+        </div>
+  );
+
+  const deployActionPanel = (
+              <div className="panel">
+                {hasIdentity && !useOwnKeys && !mustPasteForRedeploy ? (
+                  <>
+                    <p>
+                      AgentsPoppy will use the AWS credentials you already connected
+                      {identity ? (
+                        <>
+                          {" "}
+                          (<code>{identity.arn}</code>)
+                        </>
+                      ) : null}{" "}
+                      — <strong>just this once</strong> —{" "}
+                      {redeploy
+                        ? "to update the setup in place. Nothing to re-enter."
+                        : "to create the broker role + non-admin operator, then switch to that operator and stop using the elevated access."}
+                    </p>
+                    <button className="btn btn-primary" disabled={deploying} onClick={() => void deployBootstrap()}>
+                      {deploying ? (
+                        <>
+                          <PoppySpinner size={15} tone="current" /> Deploying setup…
+                        </>
+                      ) : (
+                        "Deploy setup"
+                      )}
+                    </button>
+                    <button className="btn link" type="button" disabled={deploying} onClick={() => setUseOwnKeys(true)}>
+                      Use different credentials for this step
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <p>
+                      {redeploy ? (
+                        <>
+                          Enter a key allowed to change the setup <strong>once</strong> — your admin keys, or your
+                          setup user carrying the <strong>current</strong>{" "}
+                        </>
+                      ) : (
+                        <>
+                          Paste credentials allowed to create the role <strong>once</strong> — your admin keys, or a
+                          user carrying the scoped{" "}
+                        </>
+                      )}
+                      <ExtLink href={ACCESS_POLICY_URL}>
+                        AgentsPoppy access policy <Icon name="external" className="link-ext" />
+                      </ExtLink>
+                      {redeploy ? (
+                        <> (see step 1 above if you haven't replaced it yet).</>
+                      ) : (
+                        <>
+                          . AgentsPoppy deploys the stack, then keeps <strong>only</strong> the resulting non-admin
+                          operator key.
+                        </>
+                      )}
+                    </p>
+                    <p className="muted">
+                      These setup keys are used here just to deploy — they're{" "}
+                      <strong>held in memory, never written to disk, and never sent anywhere</strong>. There is no
+                      AgentsPoppy server.
+                    </p>
+                    <div className="field-grid">
+                      <label className="field-label">
+                        Access Key ID
+                        <input
+                          className="field"
+                          placeholder="AKIA…"
+                          autoCapitalize="off"
+                          autoCorrect="off"
+                          spellCheck={false}
+                          value={setupKeyId}
+                          onChange={(e) => setSetupKeyId(e.target.value.trim())}
+                          disabled={deploying}
+                        />
+                      </label>
+                      <label className="field-label">
+                        Secret Access Key
+                        <span className="field-row">
+                          <input
+                            className="field"
+                            type={showSetupSecret ? "text" : "password"}
+                            placeholder="••••••••••••••••••••"
+                            autoCapitalize="off"
+                            autoCorrect="off"
+                            spellCheck={false}
+                            value={setupKeySecret}
+                            onChange={(e) => setSetupKeySecret(e.target.value.trim())}
+                            disabled={deploying}
+                          />
+                          <button type="button" className="btn ghost" onClick={() => setShowSetupSecret((s) => !s)}>
+                            {showSetupSecret ? "Hide" : "Show"}
+                          </button>
+                        </span>
+                      </label>
+                      <label className="field-label">
+                        Session token <span className="field-hint">only for temporary (STS) keys</span>
+                        <input
+                          className="field"
+                          placeholder="optional"
+                          autoCapitalize="off"
+                          autoCorrect="off"
+                          spellCheck={false}
+                          value={setupKeyToken}
+                          onChange={(e) => setSetupKeyToken(e.target.value.trim())}
+                          disabled={deploying}
+                        />
+                      </label>
+                    </div>
+                    <button
+                      className="btn btn-primary"
+                      disabled={deploying || !setupKeyId.trim() || !setupKeySecret.trim()}
+                      onClick={() => void deployBootstrap()}
+                    >
+                      {deploying ? (
+                        <>
+                          <PoppySpinner size={15} tone="current" /> Deploying setup…
+                        </>
+                      ) : (
+                        "Deploy setup"
+                      )}
+                    </button>
+                    {hasIdentity && (
+                      <button
+                        className="btn link"
+                        type="button"
+                        disabled={deploying}
+                        onClick={() => setUseOwnKeys(false)}
+                      >
+                        Use the credentials I already connected
+                      </button>
+                    )}
+                  </>
+                )}
+                {deployError && <p className="inline-error">{deployError}</p>}
+                <p className="micro muted">
+                  Safe to interrupt: nothing elevated is stored. If it stops partway, just click Deploy again — it
+                  picks up from wherever AWS actually got to.
+                </p>
+              </div>
+  );
+
+  // A re-apply is an UPDATE, not onboarding. Field lesson (2026-08-28): rendering it as the
+  // onboarding wizard showed five ticked steps, a "Create the broker role" heading and a Verify
+  // button — so the obvious action did nothing and the real one was invisible. The update gets
+  // its own screen: what changes, what to prepare, one action, one result.
+  if (redeploy || updateDone) {
+    return (
+      <section className="connect">
+        <button className="btn link" onClick={onBack}>
+          ← Back
+        </button>
+        <header className="connect-hero">
+          <h2>Update your AgentsPoppy setup</h2>
+          <p className="lead">
+            The protections AgentsPoppy relies on live in your AWS account, not in this app. This
+            applies the current version to them — in place; your account, role, region and connected
+            apps all stay exactly as they are.
+          </p>
+        </header>
+        {updateDone ? (
+          <div className="panel">
+            <p className="kv">
+              <Icon name="check" className="kv-check" /> Done — your AWS setup now carries the
+              current protections.
+            </p>
+            {deployNote && <p className="muted">{deployNote}</p>}
+            <button className="btn btn-primary" onClick={onBack}>
+              Done
+            </button>
+          </div>
+        ) : (
+          <>
+            {stalePolicyError && updatePolicyPanel}
+            {updateBanner}
+            {deployActionPanel}
+          </>
+        )}
+      </section>
     );
   }
 
@@ -388,49 +690,11 @@ export function ConnectAwsView({ accounts, onBack, onChanged, initialAction }: C
         </div>
       )}
 
+
       {/* Landed here from a detected policy gap (e.g. after an update that needs a new permission):
           hand the user the exact current policy to copy + a one-click re-check, so the fix is
           "replace your IAM user's policy with this" — nothing to rebuild. */}
-      {(initialAction === "update-policy" || stalePolicyError) && (
-        <div className="banner banner-warn policy-update">
-          <strong>Update your AWS policy.</strong> AgentsPoppy needs a permission your IAM user's current policy
-          doesn't grant — this happens when an update adds one. Replace the policy with the latest and you're done:
-          your account, role and region all stay exactly as they are.
-          <ol className="substeps">
-            <li>
-              <CopyPolicyButton /> — or{" "}
-              <ExtLink href={ACCESS_POLICY_URL}>
-                open it on GitHub <Icon name="external" className="link-ext" />
-              </ExtLink>
-              .
-            </li>
-            <li>
-              In AWS: <strong>IAM → Users → your user</strong> → open the AgentsPoppy policy, <strong>replace</strong>{" "}
-              it with what you copied, and save.
-            </li>
-            <li>
-              Come back and press <strong>Re-check</strong>.
-            </li>
-          </ol>
-          <div className="policy-update__actions">
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={busy || !account}
-              onClick={() => void run(async () => setVerify(await broker.verifyAccount(account!.id)))}
-            >
-              {busy ? "Checking…" : "Re-check"}
-            </button>
-            {verify?.ok ? (
-              <span className="ok">
-                <Icon name="check" /> Access restored — you're all set.
-              </span>
-            ) : verify && !verify.ok ? (
-              <span className="micro muted">Still blocked — save the policy on your IAM user, then try again.</span>
-            ) : null}
-          </div>
-        </div>
-      )}
+      {initialAction === "update-policy" && updatePolicyPanel}
 
       <div className="progress" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
         <div className="progress-fill" style={{ width: `${pct}%` }} />
@@ -754,135 +1018,7 @@ export function ConnectAwsView({ accounts, onBack, onChanged, initialAction }: C
                 </button>
               </>
             ) : (
-              <div className="panel">
-                {redeploy && (
-                  <p className="muted">
-                    Re-applies the latest setup template to your existing <code>AgentsPoppy</code> stack — e.g. to
-                    pick up new role guardrails. It uses the credentials you have connected; if those are the
-                    non-admin operator (which can't modify the stack), click{" "}
-                    <strong>Use different credentials</strong> and paste an admin or access-policy key.
-                  </p>
-                )}
-                {hasIdentity && !useOwnKeys ? (
-                  <>
-                    <p>
-                      AgentsPoppy will use the AWS credentials you already connected
-                      {identity ? (
-                        <>
-                          {" "}
-                          (<code>{identity.arn}</code>)
-                        </>
-                      ) : null}{" "}
-                      — <strong>just this once</strong> — to create the broker role + non-admin operator, then
-                      switch to that operator and stop using the elevated access.
-                    </p>
-                    <button className="btn btn-primary" disabled={deploying} onClick={() => void deployBootstrap()}>
-                      {deploying ? (
-                        <>
-                          <PoppySpinner size={15} tone="current" /> Deploying setup…
-                        </>
-                      ) : (
-                        "Deploy setup"
-                      )}
-                    </button>
-                    <button className="btn link" type="button" disabled={deploying} onClick={() => setUseOwnKeys(true)}>
-                      Use different credentials for this step
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <p>
-                      Paste credentials allowed to create the role <strong>once</strong> — your admin keys, or a
-                      user carrying the scoped{" "}
-                      <ExtLink href={ACCESS_POLICY_URL}>
-                        AgentsPoppy access policy <Icon name="external" className="link-ext" />
-                      </ExtLink>
-                      . AgentsPoppy deploys the stack, then keeps <strong>only</strong> the resulting non-admin
-                      operator key.
-                    </p>
-                    <p className="muted">
-                      These setup keys are used here just to deploy — they're{" "}
-                      <strong>held in memory, never written to disk, and never sent anywhere</strong>. There is no
-                      AgentsPoppy server.
-                    </p>
-                    <div className="field-grid">
-                      <label className="field-label">
-                        Access Key ID
-                        <input
-                          className="field"
-                          placeholder="AKIA…"
-                          autoCapitalize="off"
-                          autoCorrect="off"
-                          spellCheck={false}
-                          value={setupKeyId}
-                          onChange={(e) => setSetupKeyId(e.target.value.trim())}
-                          disabled={deploying}
-                        />
-                      </label>
-                      <label className="field-label">
-                        Secret Access Key
-                        <span className="field-row">
-                          <input
-                            className="field"
-                            type={showSetupSecret ? "text" : "password"}
-                            placeholder="••••••••••••••••••••"
-                            autoCapitalize="off"
-                            autoCorrect="off"
-                            spellCheck={false}
-                            value={setupKeySecret}
-                            onChange={(e) => setSetupKeySecret(e.target.value.trim())}
-                            disabled={deploying}
-                          />
-                          <button type="button" className="btn ghost" onClick={() => setShowSetupSecret((s) => !s)}>
-                            {showSetupSecret ? "Hide" : "Show"}
-                          </button>
-                        </span>
-                      </label>
-                      <label className="field-label">
-                        Session token <span className="field-hint">only for temporary (STS) keys</span>
-                        <input
-                          className="field"
-                          placeholder="optional"
-                          autoCapitalize="off"
-                          autoCorrect="off"
-                          spellCheck={false}
-                          value={setupKeyToken}
-                          onChange={(e) => setSetupKeyToken(e.target.value.trim())}
-                          disabled={deploying}
-                        />
-                      </label>
-                    </div>
-                    <button
-                      className="btn btn-primary"
-                      disabled={deploying || !setupKeyId.trim() || !setupKeySecret.trim()}
-                      onClick={() => void deployBootstrap()}
-                    >
-                      {deploying ? (
-                        <>
-                          <PoppySpinner size={15} tone="current" /> Deploying setup…
-                        </>
-                      ) : (
-                        "Deploy setup"
-                      )}
-                    </button>
-                    {hasIdentity && (
-                      <button
-                        className="btn link"
-                        type="button"
-                        disabled={deploying}
-                        onClick={() => setUseOwnKeys(false)}
-                      >
-                        Use the credentials I already connected
-                      </button>
-                    )}
-                  </>
-                )}
-                {deployError && <p className="inline-error">{deployError}</p>}
-                <p className="micro muted">
-                  Safe to interrupt: nothing elevated is stored. If it stops partway, just click Deploy again — it
-                  picks up from wherever AWS actually got to.
-                </p>
-              </div>
+              deployActionPanel
             )
           ) : (
             <>

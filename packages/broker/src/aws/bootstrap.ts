@@ -382,8 +382,10 @@ async function updateRolledBackMessage(gw: BootstrapGateway, region?: string): P
     (looksLikePermissions
       ? ` The usual cause is an older AgentsPoppy access policy on the key you used: this setup needs ` +
         `"iam:CreatePolicy" on arn:aws:iam::*:policy/${BOUNDARY_POLICY_NAME}, which earlier versions of ` +
-        `the policy did not grant. Re-copy the current AgentsPoppy access policy onto that IAM user (or ` +
-        `use admin keys once), then re-apply setup.`
+        `the policy did not grant. That permission exists to create one new protection — the ` +
+        `${BOUNDARY_POLICY_NAME} policy, a ceiling that caps any IAM role a connected app creates. ` +
+        `Replace the AgentsPoppy policy on that IAM user with the current version (the app's ` +
+        `"Copy the policy" button has it), then re-apply setup.`
       : "")
   );
 }

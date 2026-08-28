@@ -94,8 +94,11 @@ export function SetupUpdateBanner({
             : `So it can't tell whether the protections in your AWS account are current${status.reason ? ` — ${status.reason}` : ""}. Re-applying setup is safe either way: it changes nothing if you're already up to date.`}
         </p>
         <p className="update-banner__notes">
-          It's an in-place update and takes a few seconds, but it needs your admin AWS keys once — the
-          everyday key AgentsPoppy uses deliberately can't change its own protections.
+          It's an in-place update and takes a few seconds, but it needs your setup credentials once —
+          your admin keys, or your setup IAM user carrying the <strong>current</strong> AgentsPoppy
+          access policy (this update adds a permission, so an older copy of the policy must be
+          replaced first; the next screen shows exactly how). The everyday key AgentsPoppy uses
+          deliberately can't change its own protections.
         </p>
       </div>
       <div className="update-banner__actions">
