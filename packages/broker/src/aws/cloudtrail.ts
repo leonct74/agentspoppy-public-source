@@ -20,7 +20,7 @@
 import type { ActivityEvent } from "@agentspoppy/core";
 import { classifyActor, describePrincipal, shortService, type RawPrincipal } from "@agentspoppy/core";
 import type { ActivityProvider, ActivityQuery } from "../providers";
-import { operatorCredentials } from "./credentials";
+import { maintenanceCredentials } from "./maintenance";
 import { DEFAULT_OPERATOR_NAME } from "./role-template";
 
 /** A CloudTrail event, normalised to the fields attribution needs. */
@@ -123,7 +123,7 @@ export function sdkCloudTrailGateway(): CloudTrailGateway {
   return {
     async lookupManagementEvents(region, sinceMinutes, limit) {
       const { CloudTrailClient, LookupEventsCommand } = await import("@aws-sdk/client-cloudtrail");
-      const client = new CloudTrailClient({ region, credentials: await operatorCredentials() });
+      const client = new CloudTrailClient({ region, credentials: await maintenanceCredentials() });
       const start = new Date(Date.now() - sinceMinutes * 60_000);
       const out: CloudTrailEventRecord[] = [];
       let token: string | undefined;

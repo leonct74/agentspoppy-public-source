@@ -18,6 +18,7 @@ import { OnboardingSplash } from "./views/OnboardingSplash";
 import { ApprovalsBar } from "./components/ApprovalsBar";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { SetupUpdateBanner } from "./components/SetupUpdateBanner";
+import { OperatorKeyBanner } from "./components/OperatorKeyBanner";
 import { WhatsNew } from "./components/WhatsNew";
 import { Sidebar, type ActiveSection } from "./components/Sidebar";
 import { Icon } from "./components/Icon";
@@ -461,6 +462,17 @@ export function App() {
           <SetupUpdateBanner
             refreshKey={setupCheckKey}
             onUpdate={() => setView({ type: "connect", action: "redeploy" })}
+          />
+        )}
+        {/* Step 0 — a machine standing on the powerful setup key instead of the operator
+            key (docs/specs/operator-key-least-privilege.md). Ordered ABOVE nothing: it and
+            the staleness banner can both show; the key switch is the one to do first. */}
+        {view.type !== "connect" && (
+          <OperatorKeyBanner
+            accountId={primaryAccount?.id ?? null}
+            refreshKey={setupCheckKey}
+            onSwitched={() => setSetupCheckKey((k) => k + 1)}
+            onOpenConnect={() => setView({ type: "connect", action: "redeploy" })}
           />
         )}
         <ApprovalsBar

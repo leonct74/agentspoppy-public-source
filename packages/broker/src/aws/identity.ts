@@ -12,8 +12,18 @@
  * The SDK is loaded lazily inside the default impl; the stub keeps tests/demo
  * offline.
  */
-import { operatorCredentials, writeAgentsPoppyProfile, type AwsKeyInput } from "./credentials";
-import { TEMPLATE_VERSION } from "./role-template";
+import { HOST_SESSION_PREFIX } from "@agentspoppy/core";
+import {
+  clearOperatorKeyRecord,
+  operatorCredentials,
+  readAgentsPoppyProfileKeyId,
+  readOperatorKeyRecord,
+  removeAgentsPoppyProfile,
+  writeAgentsPoppyProfile,
+  type AwsKeyInput,
+} from "./credentials";
+import { DEFAULT_OPERATOR_NAME, TEMPLATE_VERSION } from "./role-template";
+import { maintenanceCredentials } from "./maintenance";
 import {
   readSetupStack,
   runBootstrap,
@@ -31,6 +41,25 @@ export interface CallerIdentity {
 
 export type RoleProbeResult = { ok: true; assumedArn: string } | { ok: false; reason: string };
 
+/** This machine's operator key, as far as the broker knows it — no secrets. */
+export interface OperatorKeyInfo {
+  /** The key id the `[agentspoppy]` profile holds right now (null: none stored). */
+  profileKeyId: string | null;
+  /** When THIS machine minted its operator key (null: unknown / pre-record install). */
+  mintedAt: string | null;
+}
+
+/** The kill switch failed for a reason the UI must route, not just display. */
+export class RevokeKeyError extends Error {
+  constructor(
+    message: string,
+    readonly reason: "not-operator" | "no-key" | "setup-outdated",
+  ) {
+    super(message);
+    this.name = "RevokeKeyError";
+  }
+}
+
 export interface AwsBootstrap {
   getCallerIdentity(region?: string): Promise<CallerIdentity>;
   verifyRole(roleArn: string, region: string): Promise<RoleProbeResult>;
@@ -45,9 +74,21 @@ export interface AwsBootstrap {
   /**
    * Is the setup deployed in the user's account the one this host expects? The guardrails
    * live in THEIR AWS, so a tightened one changes nothing until they re-apply — and nothing
-   * else tells them to. Read-only; needs no permission the operator doesn't already hold.
+   * else tells them to. Read-only. On template v4 the operator itself can no longer read
+   * CloudFormation, so this read arrives through the broker role (maintenance session).
    */
   readSetupVersion(region?: string): Promise<SetupVersionStatus>;
+  /**
+   * The kill switch: delete THIS machine's operator access key, then remove it from disk —
+   * in that order, and only that order (forgetting a key still live in AWS would invert the
+   * audit finding this closes). Only meaningful when the standing identity IS the operator:
+   * anything else throws `not-operator` so the UI routes to the key switch instead — on a
+   * machine standing on a setup key, the recorded id may be the SETUP key's, and a
+   * caller-inferred delete could destroy the very credential recovery depends on.
+   */
+  revokeOperatorKey?(region?: string): Promise<{ deletedKeyId: string; alreadyGone: boolean }>;
+  /** This machine's key id + mint time (drives the key-age nudge). Never secrets. */
+  operatorKeyInfo?(): Promise<OperatorKeyInfo>;
 }
 
 function regionOrDefault(region?: string): string {
@@ -72,7 +113,64 @@ export function sdkAwsBootstrap(): AwsBootstrap {
 
     async readSetupVersion(region) {
       const r = regionOrDefault(region);
-      return setupVersionStatus(await readSetupStack(sdkBootstrapGateway(r), r));
+      // Read-only gateway routed through the maintenance session (falls back to the
+      // raw operator chain until an account is configured) — on template v4 the
+      // operator user itself holds no cloudformation:* anymore.
+      return setupVersionStatus(await readSetupStack(sdkBootstrapGateway(r, undefined, maintenanceCredentials), r));
+    },
+
+    async operatorKeyInfo() {
+      return {
+        profileKeyId: readAgentsPoppyProfileKeyId(),
+        mintedAt: readOperatorKeyRecord()?.mintedAt ?? null,
+      };
+    },
+
+    async revokeOperatorKey(region) {
+      const r = regionOrDefault(region);
+      const { GetCallerIdentityCommand } = await import("@aws-sdk/client-sts");
+      const sts = await stsClient(r);
+      const out = await sts.send(new GetCallerIdentityCommand({}));
+      const arn = out.Arn ?? "";
+      if (!arn.includes(`:user/${DEFAULT_OPERATOR_NAME}`)) {
+        throw new RevokeKeyError(
+          `This machine is connected as ${arn || "an unknown identity"}, not the ${DEFAULT_OPERATOR_NAME} user — ` +
+            `there is no operator key here to revoke. If this machine is standing on a powerful setup key, ` +
+            `switch it to the operator key instead.`,
+          "not-operator",
+        );
+      }
+      const keyId = readAgentsPoppyProfileKeyId() ?? readOperatorKeyRecord()?.accessKeyId;
+      if (!keyId) {
+        throw new RevokeKeyError("No operator key is stored on this machine.", "no-key");
+      }
+
+      const { IAMClient, DeleteAccessKeyCommand } = await import("@aws-sdk/client-iam");
+      const iam = new IAMClient({ region: r, credentials: await operatorCredentials() });
+      let alreadyGone = false;
+      try {
+        // UserName explicit, never caller-inferred — see the interface note.
+        await iam.send(new DeleteAccessKeyCommand({ UserName: DEFAULT_OPERATOR_NAME, AccessKeyId: keyId }));
+      } catch (err) {
+        const name = (err as { name?: string }).name ?? "";
+        const msg = (err as Error).message ?? "";
+        if (/NoSuchEntity/i.test(name)) {
+          // The key is ALREADY dead (evicted by another machine's re-setup, or deleted
+          // in the console). That is the outcome the button promises — clean up locally.
+          alreadyGone = true;
+        } else if (/not authorized|access.?denied/i.test(msg)) {
+          throw new RevokeKeyError(
+            `Your AgentsPoppy setup doesn't yet allow the key to revoke itself — that arrives with the ` +
+              `current setup version. Re-apply setup first, then try again. Nothing was changed.`,
+            "setup-outdated",
+          );
+        } else {
+          throw err; // profile untouched — the key may still be live in AWS
+        }
+      }
+      removeAgentsPoppyProfile();
+      clearOperatorKeyRecord();
+      return { deletedKeyId: keyId, alreadyGone };
     },
 
     async getCallerIdentity(region) {
@@ -92,7 +190,10 @@ export function sdkAwsBootstrap(): AwsBootstrap {
         const out = await sts.send(
           new AssumeRoleCommand({
             RoleArn: roleArn,
-            RoleSessionName: "agentspoppy-verify",
+            // HOST prefix, deliberately outside the poppy prefix `agentspoppy-`:
+            // the old name "agentspoppy-verify" made the activity feed attribute
+            // this probe to a poppy named "verify" (core/activity.ts).
+            RoleSessionName: `${HOST_SESSION_PREFIX}verify`,
             DurationSeconds: 900,
           }),
         );
@@ -137,7 +238,15 @@ export class StubAwsBootstrap implements AwsBootstrap {
     return this.identity;
   }
   async verifyRole(roleArn: string): Promise<RoleProbeResult> {
-    return { ok: true, assumedArn: `${roleArn}/agentspoppy-verify` };
+    return { ok: true, assumedArn: `${roleArn}/${HOST_SESSION_PREFIX}verify` };
+  }
+  async operatorKeyInfo(): Promise<OperatorKeyInfo> {
+    return { profileKeyId: "AKIASTUBOPERATORKEY", mintedAt: new Date().toISOString() };
+  }
+  async revokeOperatorKey(): Promise<{ deletedKeyId: string; alreadyGone: boolean }> {
+    // Demo/test: simulate the revoke without touching AWS or ~/.aws.
+    this.probes = 0;
+    return { deletedKeyId: "AKIASTUBOPERATORKEY", alreadyGone: false };
   }
   async readSetupVersion(): Promise<SetupVersionStatus> {
     // Demo/test: the simulated setup is always the one this build ships, so the demo

@@ -285,6 +285,50 @@ approving a connection sees a careful breakdown of AWS grants and no mention tha
 code is about to run on their machine. For this threat that line matters more than any
 single grant.
 
+### 6.1.1 What holding the operator key grants — template v4 (2026-08-29)
+
+§6.1 is about *where* the key lives; this is about *what it is worth if taken*. The two are
+independent — a key can be perfectly stored and still be over-powered — and the second is
+what template v4 (`TEMPLATE_VERSION = 4`, `role-template.ts`) addresses. Full detail:
+`docs/specs/operator-key-least-privilege.md`.
+
+Before v4 the operator IAM user was **two doors, and only one had a guard**. It could
+`sts:AssumeRole` the broker role (where the five Deny guardrails and the boundary apply) —
+*and* it carried, directly on the user, account-wide `cloudformation:DeleteStack` plus an
+S3/DynamoDB/Cognito/Lambda/Logs/SES/EventBridge delete set. Those direct powers sat on the
+*user*, where no guardrail is written, so a stolen key could destroy resources without ever
+touching the role the whole mechanism is built to police.
+
+v4 collapses that to one guarded door. It does **not** touch I1–I6, the guardrails, or the
+boundary; it changes the operator user and the role's trust policy only:
+
+- **Operator inline policy → assume-only.** `MonitorAndTeardown` + `HostResidualCleanup` are
+  removed from the user and now travel as the **session policy** of a broker-role session
+  (`maintenance.ts`) — identical effective permissions for the host's own housekeeping, but
+  every use now passes the guarded door and is bounded by I1 (narrowing-only) like any other
+  session. What remains on the user: assume the broker role, `GetCallerIdentity`, and
+  `SelfRevoke`.
+- **`SelfRevoke` — the kill switch.** The operator may delete *its own* access key and
+  nothing else. Self-DoS only: no `iam:CreateAccessKey` is granted anywhere, so a revoked
+  key can never be replaced except by re-running setup with elevated credentials. It is a
+  direct operator call because through the role it would (correctly) be refused by
+  `CannotTamperWithAgentsPoppy`; the operator user carries no boundary and no Deny, so the
+  single Allow suffices.
+- **Trust policy → conditioned, two hops.** *HopOne* admits only the operator user's
+  **long-term** key (`aws:PrincipalArn` = the operator user, `Null aws:TokenIssueTime` =
+  true). The `TokenIssueTime` clause is load-bearing: `sts:GetSessionToken` needs no
+  permission and cannot be denied by policy, so without it a thief could pre-mint up to 36 h
+  of temporary sessions that survive deleting the key — the clause refuses every temporary
+  credential, which is what makes the kill switch *terminal*. *HopTwo* admits the broker
+  role re-assuming itself (`aws:PrincipalArn` = the role ARN — the documented value for an
+  assumed-role session; the session ARN is explicitly **not** it). The existing
+  tag-conditioned `PoppySessionCannotReAssumeTheBrokerRole` Deny is unchanged and is what
+  still stops a tagged poppy session re-entering to shed its scope.
+
+This narrows the mechanism; it relaxes nothing. Because the host's own housekeeping now runs
+as a broker-role session, it is **subject to** the same guardrails and narrowing as a poppy,
+where before it ran outside them.
+
 ### 6.2 Reviewed bytes and installed bytes are the same bytes
 
 A checksum proves an archive did not change between review and install. It does **not** prove
@@ -311,6 +355,23 @@ reader catching the trick. Authority for the one exemption sits on the listing
 gated at all.
 
 ## 7. Change history
+
+- **2026-08-29 (operator key least privilege — template v4)** — the operator IAM user was two
+  independent powers: assume the broker role (guarded), *and* a direct account-wide
+  `cloudformation:DeleteStack` + multi-service delete set written straight onto the user,
+  where no guardrail reaches. A stolen key could destroy resources without ever touching the
+  policed role. v4 makes the user **assume-only**: the two cleanup statements moved to the
+  broker role's session policy (`maintenance.ts`), so the host's own housekeeping is now
+  bounded by I1 like any poppy; the only remaining IAM power is `SelfRevoke` (delete its own
+  key — the kill switch, self-DoS only, no replacement possible without re-setup). The trust
+  policy gained two conditions: HopOne pins the caller to the operator user's **long-term**
+  key (`Null aws:TokenIssueTime = true` refuses every temporary session, which is what makes
+  key revocation terminal against an un-forbiddable `GetSessionToken` pre-mint), HopTwo
+  admits the role's own re-assume by role ARN. **Touches no invariant, no guardrail, no
+  boundary — it removes standing power and tightens trust, nothing is relaxed.** Found by the
+  founder asking whether the key saved on disk could be better protected. `TEMPLATE_VERSION`
+  3 → 4. `aws/role-template.ts`, `aws/maintenance.ts`, spec
+  `docs/specs/operator-key-least-privilege.md`. §6.1.1.
 
 - **2026-08-27 (fault A — the boundary protects itself)** — `CannotTamperWithAgentsPoppy`
   denied `iam:*` on the broker role and the operator user, and **not on

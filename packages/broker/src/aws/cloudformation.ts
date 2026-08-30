@@ -20,7 +20,7 @@
  */
 import type { ConnectedAccount, Connection, InfraGraph, ResidualResource, ResourceEntry, StackInventory } from "@agentspoppy/core";
 import type { CloudProvider } from "../providers";
-import { operatorCredentials } from "./credentials";
+import { maintenanceCredentials } from "./maintenance";
 import { AccountUnreadableError, isAwsAuthError } from "./errors";
 import { APP_TAG_KEY } from "./policy";
 import { regionsFor } from "./regions";
@@ -201,7 +201,7 @@ function ownedBy(summary: CfnStackSummary, connection: Connection): boolean {
 export function sdkCfnGateway(): CfnGateway {
   async function client(region: string) {
     const { CloudFormationClient } = await import("@aws-sdk/client-cloudformation");
-    return new CloudFormationClient({ region, credentials: await operatorCredentials() });
+    return new CloudFormationClient({ region, credentials: await maintenanceCredentials() });
   }
 
   return {
@@ -256,7 +256,7 @@ export function sdkCfnGateway(): CfnGateway {
 
     async emptyBucket(region, bucket) {
       const { S3Client, ListObjectVersionsCommand, DeleteObjectsCommand } = await import("@aws-sdk/client-s3");
-      const s3 = new S3Client({ region, credentials: await operatorCredentials() });
+      const s3 = new S3Client({ region, credentials: await maintenanceCredentials() });
       // ListObjectVersions covers both versioned and unversioned buckets (the latter
       // reports a single "null" version per key), so a fresh list + batch delete loop
       // drains either kind. We re-list from the start each pass since we're deleting.
@@ -285,7 +285,7 @@ export function sdkCfnGateway(): CfnGateway {
       const { SESClient, DescribeActiveReceiptRuleSetCommand, SetActiveReceiptRuleSetCommand } = await import(
         "@aws-sdk/client-ses"
       );
-      const ses = new SESClient({ region, credentials: await operatorCredentials() });
+      const ses = new SESClient({ region, credentials: await maintenanceCredentials() });
       let activeName: string | undefined;
       try {
         const active = await ses.send(new DescribeActiveReceiptRuleSetCommand({}));

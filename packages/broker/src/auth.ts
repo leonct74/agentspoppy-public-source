@@ -27,6 +27,7 @@
  * costs interop nothing.
  */
 import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createRequire } from "node:module";
 
 /**
  * The broker prints exactly one line `<prefix><token>` on stdout at startup; the
@@ -74,9 +75,38 @@ export interface AuthConfig {
   resolveBackend?: (token: string) => string | null;
 }
 
+/**
+ * True when this process is a packaged single-executable build. A property of the
+ * ARTIFACT itself — not a build-time flag a from-source run might accidentally
+ * carry — which is why it gates the dev escape hatch below.
+ */
+export function isSeaBuild(): boolean {
+  try {
+    // Sync on purpose (resolveCaller sits on the request path); createRequire is
+    // the ESM-safe way to reach the builtin synchronously.
+    const req = createRequire(import.meta.url);
+    return (req("node:sea") as { isSea?: () => boolean }).isSea?.() ?? false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether the dev escape hatch actually grants host. Pure + exported so the gate
+ * is unit-tested with both artifact states (the real isSeaBuild is environment-
+ * dependent). `devOpen` alone is NOT enough in a packaged build — see resolveCaller.
+ */
+export function devHatchGrantsHost(devOpen: boolean | undefined, isSea: boolean): boolean {
+  return !!devOpen && !isSea;
+}
+
 /** Classify a request's presented token into a {@link Caller}. */
 export function resolveCaller(token: string | null, cfg: AuthConfig): Caller {
-  if (cfg.devOpen) return { role: "host" }; // dev harness: no host to hold a token
+  // The dev escape hatch is INERT in packaged builds: a local process that launches
+  // the real app (or the shipped broker binary) with AGENTSPOPPY_DEV_OPEN=1 in its
+  // environment must not be handed the management plane — and with the operator key
+  // moving out of world-readable files, the management plane is the secret's door.
+  if (devHatchGrantsHost(cfg.devOpen, isSeaBuild())) return { role: "host" }; // dev harness
   if (token && cfg.hostToken && tokensMatch(token, cfg.hostToken)) return { role: "host" };
   if (token && cfg.resolveBackend) {
     const connectionId = cfg.resolveBackend(token);

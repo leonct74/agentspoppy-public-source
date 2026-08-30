@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.0
 
 import { describe, it, expect } from "vitest";
-import { bearerToken, generateToken, resolveCaller, tokensMatch } from "./auth";
+import { bearerToken, devHatchGrantsHost, generateToken, isSeaBuild, resolveCaller, tokensMatch } from "./auth";
 
 describe("broker auth helpers", () => {
   it("mints distinct, non-trivial tokens", () => {
@@ -50,8 +50,23 @@ describe("broker auth helpers", () => {
     });
 
     it("devOpen makes every caller the host (browser dev harness only)", () => {
+      // In a from-source dev run isSeaBuild() is false, so the hatch is live.
       expect(resolveCaller(null, { devOpen: true })).toEqual({ role: "host" });
       expect(resolveCaller("anything", { devOpen: true, hostToken })).toEqual({ role: "host" });
+    });
+
+    it("the dev hatch is INERT in a packaged (SEA) build — the env-var backdoor can't grant host", () => {
+      // A same-user attacker launching the real app with AGENTSPOPPY_DEV_OPEN=1 must not be
+      // handed the management plane (docs/specs/operator-key-least-privilege.md §5). The gate
+      // is pure so both artifact states are deterministic.
+      expect(devHatchGrantsHost(true, false)).toBe(true); // from-source dev: hatch live
+      expect(devHatchGrantsHost(true, true)).toBe(false); // packaged build: hatch closed
+      expect(devHatchGrantsHost(false, false)).toBe(false);
+      expect(devHatchGrantsHost(undefined, false)).toBe(false);
+    });
+
+    it("isSeaBuild is false in a from-source test run (so devOpen still works here)", () => {
+      expect(isSeaBuild()).toBe(false);
     });
   });
 });

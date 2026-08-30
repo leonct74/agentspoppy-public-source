@@ -39,7 +39,7 @@ export const DEFAULT_OPERATOR_NAME = "AgentsPoppyOperator";
  * idempotent UpdateStack, so a needless one costs nothing while a missed one leaves a user
  * without a guardrail they believe they have.
  */
-export const TEMPLATE_VERSION = 3;
+export const TEMPLATE_VERSION = 4;
 
 /** The permissions boundary that caps any role a poppy creates. */
 export const BOUNDARY_POLICY_NAME = "AgentsPoppyBoundary";
@@ -134,14 +134,51 @@ const AUDIT_GUARDRAIL_ACTIONS = [
 ];
 
 /** Trust policy: the operator's own account may assume the role and tag the session. */
-export function trustPolicy(operatorAccountId: string): object {
+export function trustPolicy(
+  operatorAccountId: string,
+  roleName: string = DEFAULT_ROLE_NAME,
+  operatorName: string = DEFAULT_OPERATOR_NAME,
+): object {
+  const operatorArn = `arn:aws:iam::${operatorAccountId}:user/${operatorName}`;
+  const roleArn = `arn:aws:iam::${operatorAccountId}:role/${roleName}`;
   return {
     Version: "2012-10-17",
     Statement: [
       {
+        // HOP 1 — the operator's LONG-TERM key, and only that.
+        //
+        // `aws:PrincipalArn` pins the caller to the operator user (Principal stays the
+        // account root, because naming a principal directly binds its internal unique-id
+        // and a delete+recreate of the user would then brick the trust permanently; a
+        // string condition survives that). `Null aws:TokenIssueTime = true` admits ONLY
+        // long-term credentials — that key exists solely for temporary sessions — which is
+        // what makes the kill switch terminal: a `GetSessionToken` session (which no policy
+        // can forbid) is a temporary credential, so it can never satisfy this and can never
+        // enter, and once the underlying access key is deleted nothing is left that can.
+        // `sts:SetSourceIdentity` is granted here so a later release can stamp per-device
+        // identity (Roles Anywhere needs it too); this release does not send one.
+        Sid: "HopOne",
         Effect: "Allow",
         Principal: { AWS: `arn:aws:iam::${operatorAccountId}:root` },
-        Action: ["sts:AssumeRole", "sts:TagSession"],
+        Action: ["sts:AssumeRole", "sts:TagSession", "sts:SetSourceIdentity"],
+        Condition: {
+          ArnEquals: { "aws:PrincipalArn": operatorArn },
+          Null: { "aws:TokenIssueTime": "true" },
+        },
+      },
+      {
+        // HOP 2 — the vend's self-re-assume (role chaining). For an assumed-role session
+        // `aws:PrincipalArn` evaluates to the ROLE ARN, never the session ARN (AWS docs are
+        // explicit). Widening from "this session" to "any session of the broker role" is
+        // safe: the tag-conditioned PoppySessionCannotReAssumeTheBrokerRole Deny is what
+        // actually stops a tagged poppy session from re-entering to shed its scope.
+        Sid: "HopTwo",
+        Effect: "Allow",
+        Principal: { AWS: `arn:aws:iam::${operatorAccountId}:root` },
+        Action: ["sts:AssumeRole", "sts:TagSession", "sts:SetSourceIdentity"],
+        Condition: {
+          ArnEquals: { "aws:PrincipalArn": roleArn },
+        },
       },
     ],
   };
@@ -277,76 +314,36 @@ export function roleCloudFormationTemplate(input: RoleTemplateInput): object {
               PolicyName: "AgentsPoppyOperatorAccess",
               PolicyDocument: {
                 Version: "2012-10-17",
+                // Template v4 (docs/specs/operator-key-least-privilege.md): the operator user
+                // is ASSUME-ONLY. Its former account-wide monitoring + cleanup powers
+                // (MonitorAndTeardown, HostResidualCleanup) sat OUTSIDE every Deny guardrail —
+                // a stolen key could delete stacks and buckets without ever touching the role.
+                // Those two statements moved to the broker role's SESSION POLICY
+                // (packages/broker/src/aws/maintenance.ts): identical effective permissions for
+                // the host, but now every use passes the guarded door. What is left here is the
+                // single choke point (assume the broker role), the identity probe, and the
+                // self-revoke that powers the kill switch.
                 Statement: [
-                  { Sid: "AssumeBrokerRole", Effect: "Allow", Action: "sts:AssumeRole", Resource: brokerRoleArn },
+                  {
+                    Sid: "AssumeBrokerRole",
+                    Effect: "Allow",
+                    // SetSourceIdentity is required in the caller's own policy (as well as the
+                    // trust policy) for a later release to stamp a source identity on hop 1.
+                    Action: ["sts:AssumeRole", "sts:SetSourceIdentity"],
+                    Resource: brokerRoleArn,
+                  },
                   { Sid: "WhoAmI", Effect: "Allow", Action: "sts:GetCallerIdentity", Resource: "*" },
                   {
-                    Sid: "MonitorAndTeardown",
+                    // The kill switch: the operator may delete its OWN access key — nothing
+                    // else. Self-DoS only: no iam:CreateAccessKey is granted anywhere, so a
+                    // deleted key can never be replaced except by re-running setup with elevated
+                    // credentials. It stays a DIRECT operator call because through the broker
+                    // role it would (correctly) be refused by CannotTamperWithAgentsPoppy; the
+                    // operator user carries no boundary and no Deny, so this one Allow is enough.
+                    Sid: "SelfRevoke",
                     Effect: "Allow",
-                    Action: [
-                      "cloudformation:ListStacks",
-                      "cloudformation:DescribeStacks",
-                      "cloudformation:DescribeStackResources",
-                      // Read-only: lets the infra map read a stack's resources (so they
-                      // read authoritatively "present", not a CloudTrail "verifying") and
-                      // its template (so it can draw the dependency edges between services).
-                      "cloudformation:ListStackResources",
-                      "cloudformation:GetTemplate",
-                      "cloudformation:DeleteStack",
-                      "tag:GetResources",
-                      // Read recent management events to surface account activity that
-                      // did NOT go through AgentsPoppy (free CloudTrail Event history).
-                      "cloudtrail:LookupEvents",
-                    ],
-                    Resource: "*",
-                  },
-                  {
-                    // The host-side residual deletion engine: after (or instead of) a poppy's
-                    // own cleanup, the HOST deletes what the tag sweep still attributes to it —
-                    // the guarantee that teardown completes even for a revoked/blocked poppy.
-                    // Unconditioned by design: several of these actions don't (reliably)
-                    // support aws:ResourceTag conditions, and a condition that silently fails
-                    // to authorize means orphaned, billable resources — the exact failure this
-                    // engine exists to prevent. The real safety control is in code: the engine
-                    // only ever targets resources the tag sweep attributed to a poppy, and
-                    // re-reads the live tag immediately before every deletion.
-                    Sid: "HostResidualCleanup",
-                    Effect: "Allow",
-                    Action: [
-                      // The *TagResource-read actions are the engine's LIVE pre-delete tag
-                      // check — fresher than the eventually-consistent tag index the sweep
-                      // uses, so a just-untagged/retagged resource is never deleted.
-                      "s3:GetBucketTagging",
-                      "s3:ListBucketVersions",
-                      "s3:DeleteObject",
-                      "s3:DeleteObjectVersion",
-                      "s3:DeleteBucket",
-                      "dynamodb:ListTagsOfResource",
-                      "dynamodb:UpdateTable",
-                      "dynamodb:DeleteTable",
-                      "cognito-idp:ListTagsForResource",
-                      "cognito-idp:DescribeUserPool",
-                      "cognito-idp:DeleteUserPoolDomain",
-                      "cognito-idp:DeleteUserPool",
-                      "lambda:ListTags",
-                      "lambda:DeleteFunction",
-                      "logs:ListTagsForResource",
-                      "logs:DeleteLogGroup",
-                      "ses:DeleteIdentity",
-                      "ses:DescribeActiveReceiptRuleSet",
-                      "ses:SetActiveReceiptRuleSet",
-                      "ses:DeleteReceiptRuleSet",
-                      // EventBridge rules (first needed by CrewPoppy's schedule ticker,
-                      // 2026-07-29: its certify teardown DELETE_FAILED on the rule).
-                      // Same shape as every service above: the tag/describe reads are the
-                      // live pre-delete check, targets must be removed before a rule can go.
-                      "events:ListTagsForResource",
-                      "events:DescribeRule",
-                      "events:ListTargetsByRule",
-                      "events:RemoveTargets",
-                      "events:DeleteRule",
-                    ],
-                    Resource: "*",
+                    Action: "iam:DeleteAccessKey",
+                    Resource: sub(`arn:aws:iam::\${AWS::AccountId}:user/${operatorName}`),
                   },
                 ],
               },
@@ -359,7 +356,7 @@ export function roleCloudFormationTemplate(input: RoleTemplateInput): object {
         Properties: {
           RoleName: roleName,
           MaxSessionDuration: 3600,
-          AssumeRolePolicyDocument: trustPolicy(input.operatorAccountId),
+          AssumeRolePolicyDocument: trustPolicy(input.operatorAccountId, roleName, operatorName),
           Policies: [
             {
               PolicyName: "AgentsPoppyBrokeredAccess",

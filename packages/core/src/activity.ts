@@ -79,10 +79,20 @@ export interface ActivitySummary {
 const DEFAULT_SESSION_PREFIX = "agentspoppy-";
 
 /**
+ * Session-name prefix for the HOST's own broker-role sessions (maintenance work,
+ * the connection-verify probe). Deliberately does NOT start with the poppy prefix
+ * `agentspoppy-` — a broker-role session outside the poppy prefix used to fall
+ * through to "external", so the app's own housekeeping surfaced in the activity
+ * feed as a stranger in the account (docs/specs/operator-key-least-privilege.md).
+ */
+export const HOST_SESSION_PREFIX = "AgentsPoppyHost-";
+
+/**
  * Bucket a principal. A brokered session is an AssumeRole of the broker role
  * whose session name carries our prefix — from it we recover the connection id.
- * The operator is AgentsPoppy acting on the user's behalf. Everything else is
- * activity that reached the account outside AgentsPoppy.
+ * The operator is AgentsPoppy acting on the user's behalf, and so is a broker-role
+ * session carrying the HOST prefix (the app's own maintenance work). Everything
+ * else is activity that reached the account outside AgentsPoppy.
  */
 export function classifyActor(
   p: RawPrincipal,
@@ -91,6 +101,9 @@ export function classifyActor(
   const prefix = ctx.sessionPrefix ?? DEFAULT_SESSION_PREFIX;
   if (p.sessionName?.startsWith(prefix) && (!p.roleName || p.roleName === ctx.brokerRoleName)) {
     return { kind: "poppy", connectionId: p.sessionName.slice(prefix.length) };
+  }
+  if (p.sessionName?.startsWith(HOST_SESSION_PREFIX) && (!p.roleName || p.roleName === ctx.brokerRoleName)) {
+    return { kind: "agentspoppy" };
   }
   const operatorNames = [ctx.operatorName, ctx.canonicalOperatorName].filter((n): n is string => !!n);
   const isOperator =

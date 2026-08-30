@@ -228,9 +228,12 @@ describe("ConnectAwsView", () => {
 
     await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith("/bootstrap"))).toBe(true));
     const bootstrap = fetchMock.mock.calls.find(([u]) => String(u).endsWith("/bootstrap"))!;
-    // Reused the connected creds (no keys posted) — AND declared itself update-only, so the
-    // broker touches the stack without rotating the credential this machine runs on.
-    expect(JSON.parse(String((bootstrap[1] as RequestInit).body))).toEqual({ updateOnly: true });
+    // Reused the connected creds (no keys posted). The mocked identity is NOT the operator
+    // (a hand-managed user), so the re-apply runs KEYS-FIRST: switch this machine onto the
+    // restricted operator key, then apply the template — after template v4 a non-operator
+    // key can no longer assume the role, so updating first would strand it
+    // (docs/specs/operator-key-least-privilege.md, ordering §3).
+    expect(JSON.parse(String((bootstrap[1] as RequestInit).body))).toEqual({ keysFirst: true });
   });
 
   it("lets an already-connected user reveal the key form to change AWS credentials", async () => {
@@ -498,11 +501,12 @@ describe("ConnectAwsView", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Verify connection" }));
 
-    // Actionable guidance (replace the policy), not just the raw STS message.
-    expect(await screen.findByText(/policy is missing a permission/i)).toBeTruthy();
-    expect(screen.getAllByRole("button", { name: /Copy the policy/i }).length).toBeGreaterThan(0);
-    const link = screen.getByRole("link", { name: /open it on GitHub/i });
-    expect(link.getAttribute("href")).toContain("agentspoppy-public-source");
+    // Actionable guidance: the connected identity is NOT the operator, so the remedy is
+    // switching this machine onto the operator key (Update setup) — a user-policy edit can
+    // no longer grant AssumeRole (the access policy dropped it; after template v4 the trust
+    // condition refuses non-operator principals outright).
+    expect(await screen.findByText(/setup key, not the operator key/i)).toBeTruthy();
+    expect(screen.getByText(/Update setup/)).toBeTruthy();
     // Still shows the raw AWS reason as a detail.
     expect(screen.getByText(/AWS said:/)).toBeTruthy();
   });

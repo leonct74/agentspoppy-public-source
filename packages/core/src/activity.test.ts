@@ -3,6 +3,7 @@
 
 import { describe, it, expect } from "vitest";
 import {
+  HOST_SESSION_PREFIX,
   classifyActor,
   describePrincipal,
   shortService,
@@ -20,6 +21,24 @@ describe("classifyActor", () => {
       ctx,
     );
     expect(r).toEqual({ kind: "poppy", connectionId: "conn-123" });
+  });
+
+  it("attributes a HOST maintenance session (broker role, host prefix) to AgentsPoppy, not a poppy", () => {
+    // The maintenance/verify sessions run on the broker role with the HOST prefix — they must
+    // read as AgentsPoppy itself, never as a poppy named 'maintenance' and never as external
+    // (docs/specs/operator-key-least-privilege.md).
+    const maint = classifyActor(
+      { type: "AssumedRole", roleName: "AgentsPoppyBroker", sessionName: `${HOST_SESSION_PREFIX}maintenance` },
+      ctx,
+    );
+    expect(maint).toEqual({ kind: "agentspoppy" });
+    const verify = classifyActor(
+      { type: "AssumedRole", roleName: "AgentsPoppyBroker", sessionName: `${HOST_SESSION_PREFIX}verify` },
+      ctx,
+    );
+    expect(verify.kind).toBe("agentspoppy");
+    // And it must NOT be mistaken for a poppy connection (no connectionId leaks out).
+    expect(maint.connectionId).toBeUndefined();
   });
 
   it("does not treat a same-named session on a DIFFERENT role as a poppy", () => {

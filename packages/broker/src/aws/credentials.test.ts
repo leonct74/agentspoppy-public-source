@@ -2,7 +2,13 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.0
 
 import { describe, it, expect } from "vitest";
-import { AGENTSPOPPY_PROFILE, upsertIniSection, writeAgentsPoppyProfile } from "./credentials";
+import {
+  AGENTSPOPPY_PROFILE,
+  removeIniSection,
+  removeAgentsPoppyProfile,
+  upsertIniSection,
+  writeAgentsPoppyProfile,
+} from "./credentials";
 
 const body = ["aws_access_key_id = AKIAEXAMPLE", "aws_secret_access_key = secret"];
 
@@ -54,6 +60,59 @@ describe("writeAgentsPoppyProfile", () => {
       const out = readFileSync(file, "utf8");
       expect(out).toContain("[agentspoppy]");
       expect(out).toContain("AKIASANDBOX");
+    } finally {
+      if (prev === undefined) delete process.env.AWS_SHARED_CREDENTIALS_FILE;
+      else process.env.AWS_SHARED_CREDENTIALS_FILE = prev;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("removeIniSection", () => {
+  it("removes the target section and preserves all others", () => {
+    const existing =
+      "[default]\naws_access_key_id = KEEP\n\n[agentspoppy]\naws_access_key_id = GONE\naws_secret_access_key = x\n\n[other]\nfoo = bar\n";
+    const out = removeIniSection(existing, AGENTSPOPPY_PROFILE);
+    expect(out).not.toContain("GONE");
+    expect(out).not.toContain("[agentspoppy]");
+    expect(out).toContain("[default]");
+    expect(out).toContain("KEEP");
+    expect(out).toContain("[other]");
+    expect(out).toContain("foo = bar");
+  });
+
+  it("returns empty when the only section was removed", () => {
+    const out = removeIniSection("[agentspoppy]\naws_access_key_id = X\n", AGENTSPOPPY_PROFILE);
+    expect(out).toBe("");
+  });
+
+  it("is a no-op string transform when the section is absent", () => {
+    const existing = "[default]\naws_access_key_id = KEEP\n";
+    expect(removeIniSection(existing, AGENTSPOPPY_PROFILE)).toContain("KEEP");
+  });
+});
+
+describe("removeAgentsPoppyProfile (kill switch / forget)", () => {
+  it("removes only the agentspoppy profile from the credentials file, keeping others", async () => {
+    const { mkdtempSync, readFileSync, writeFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "ap-creds-rm-"));
+    const file = join(dir, "credentials");
+    const prev = process.env.AWS_SHARED_CREDENTIALS_FILE;
+    process.env.AWS_SHARED_CREDENTIALS_FILE = file;
+    try {
+      writeFileSync(
+        file,
+        "[default]\naws_access_key_id = KEEP\n\n[agentspoppy]\naws_access_key_id = AKIAGONE\naws_secret_access_key = s\n",
+      );
+      expect(removeAgentsPoppyProfile()).toBe(true);
+      const out = readFileSync(file, "utf8");
+      expect(out).toContain("KEEP");
+      expect(out).not.toContain("AKIAGONE");
+      expect(out).not.toContain("[agentspoppy]");
+      // Idempotent: a second call finds nothing to remove.
+      expect(removeAgentsPoppyProfile()).toBe(false);
     } finally {
       if (prev === undefined) delete process.env.AWS_SHARED_CREDENTIALS_FILE;
       else process.env.AWS_SHARED_CREDENTIALS_FILE = prev;

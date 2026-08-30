@@ -30,12 +30,15 @@ import {
   AccountUnreadableError,
   DEFAULT_OPERATOR_NAME,
   DEFAULT_ROLE_NAME,
+  EvictionRequiredError,
+  RevokeKeyError,
   TEMPLATE_VERSION,
+  configureMaintenanceSession,
   consoleUrlForArn,
   roleTemplateJson,
   type SetupVersionStatus,
 } from "./aws";
-import type { AwsBootstrap, AwsKeyInput, CallerIdentity, RoleProbeResult } from "./aws";
+import type { AwsBootstrap, AwsKeyInput, CallerIdentity, OperatorKeyInfo, RoleProbeResult } from "./aws";
 
 /** Recent account activity, attributed, with the headline counts. */
 export interface ActivityReport {
@@ -68,7 +71,17 @@ function roleNameFromArn(arn?: string): string | undefined {
   return arn?.match(/:role\/(.+)$/)?.[1];
 }
 
-export type BrokerErrorCode = "not_found" | "invalid_state" | "bad_request" | "account_unreadable";
+export type BrokerErrorCode =
+  | "not_found"
+  | "invalid_state"
+  | "bad_request"
+  | "account_unreadable"
+  /** Making room for a new operator key would delete another machine's — confirm first. */
+  | "eviction_required"
+  /** The action needs the machine to be standing on the operator key (step 0 first). */
+  | "not_operator"
+  /** The deployed setup template predates this capability — re-apply setup first. */
+  | "setup_outdated";
 
 export class BrokerError extends Error {
   constructor(public readonly code: BrokerErrorCode, message: string) {
@@ -135,9 +148,48 @@ export class BrokerService {
 
   // --- aws bootstrap ---
 
+  /**
+   * Point the shared maintenance session at this account's broker role, so every
+   * housekeeping AWS client (activity feed, tag sweep, teardown, residual cleanup,
+   * the staleness read) goes through the guarded door instead of the raw key
+   * (docs/specs/operator-key-least-privilege.md). Cheap and idempotent.
+   */
+  private maintainFor(account: ConnectedAccount | undefined): void {
+    if (account?.roleArn) {
+      configureMaintenanceSession({ roleArn: account.roleArn, region: regionFor(account) });
+    }
+  }
+
   /** The operator's AWS identity — also a "are my credentials working?" probe. */
   getAwsIdentity(): Promise<CallerIdentity> {
     return this.aws.getCallerIdentity();
+  }
+
+  /** This machine's operator-key id + mint time (never secrets) — the key-age nudge. */
+  async getOperatorKeyInfo(): Promise<OperatorKeyInfo> {
+    if (!this.aws.operatorKeyInfo) return { profileKeyId: null, mintedAt: null };
+    return this.aws.operatorKeyInfo();
+  }
+
+  /**
+   * The kill switch: revoke THIS machine's operator key (delete in AWS first, then
+   * forget locally). Errors are routed, not just displayed — see RevokeKeyError.
+   */
+  async revokeOperatorKey(): Promise<{ deletedKeyId: string; alreadyGone: boolean }> {
+    if (!this.aws.revokeOperatorKey) {
+      throw new BrokerError("invalid_state", "this build cannot revoke keys");
+    }
+    const account = (await this.store.listAccounts())[0];
+    try {
+      return await this.aws.revokeOperatorKey(account ? regionFor(account) : undefined);
+    } catch (err) {
+      if (err instanceof RevokeKeyError) {
+        const code =
+          err.reason === "not-operator" ? "not_operator" : err.reason === "setup-outdated" ? "setup_outdated" : "invalid_state";
+        throw new BrokerError(code, err.message);
+      }
+      throw err;
+    }
   }
 
   /**
@@ -170,6 +222,7 @@ export class BrokerService {
     // No AWS linked → there is nothing deployed to be stale, and asking anyway would send a
     // brand-new user's first launch on a scan of every AWS region to learn what we already know.
     if (!account) return { state: "absent", deployed: null, expected: TEMPLATE_VERSION };
+    this.maintainFor(account);
     try {
       return await this.aws.readSetupVersion(regionFor(account));
     } catch (err) {
@@ -205,6 +258,8 @@ export class BrokerService {
     regionOverride?: string,
     /** Re-apply: touch the stack only — never rotate the operator key or the local profile. */
     updateOnly?: boolean,
+    /** Step 0 / eviction consent — see BootstrapInput (docs/specs/operator-key-least-privilege.md). */
+    extra?: { keysFirst?: boolean; allowEviction?: boolean },
   ): Promise<{
     brokerRoleArn: string;
     account: ConnectedAccount;
@@ -212,6 +267,8 @@ export class BrokerService {
     joinedExistingSetupIn?: string;
     /** Set when the run connected this machine but could NOT re-apply the template. */
     setupNotUpdated?: boolean;
+    /** When `setupNotUpdated` came from a thrown failure (keys-first mode): the reason. */
+    setupUpdateError?: string;
     /** Set when the oldest operator key was retired to stay within IAM's 2-key limit. */
     evictedAccessKeyId?: string;
   }> {
@@ -234,12 +291,20 @@ export class BrokerService {
     const region = existing
       ? regionFor(existing)
       : regionOverride?.trim() || process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || "us-east-1";
-    const result = await this.aws.deployBootstrap({
-      setup,
-      region,
-      expectedAccountId: existing?.accountId,
-      ...(updateOnly ? { updateOnly: true } : {}),
-    });
+    let result;
+    try {
+      result = await this.aws.deployBootstrap({
+        setup,
+        region,
+        expectedAccountId: existing?.accountId,
+        ...(updateOnly ? { updateOnly: true } : {}),
+        ...(extra?.keysFirst ? { keysFirst: true } : {}),
+        ...(extra?.allowEviction ? { allowEviction: true } : {}),
+      });
+    } catch (err) {
+      if (err instanceof EvictionRequiredError) throw new BrokerError("eviction_required", err.message);
+      throw err;
+    }
     // An update-only run never touches credentials, so the cached identity stays valid.
     if (!updateOnly) this.operatorIdCache = null;
 
@@ -248,11 +313,13 @@ export class BrokerService {
     const extras = {
       ...(result.joinedExistingSetupIn ? { joinedExistingSetupIn: result.joinedExistingSetupIn } : {}),
       ...(result.setupNotUpdated ? { setupNotUpdated: true } : {}),
+      ...(result.setupUpdateError ? { setupUpdateError: result.setupUpdateError } : {}),
       ...(result.evictedAccessKeyId ? { evictedAccessKeyId: result.evictedAccessKeyId } : {}),
     };
     if (target) {
       const updated: ConnectedAccount = { ...target, roleArn: result.brokerRoleArn };
       await this.store.updateAccount(updated);
+      this.maintainFor(updated);
       return { brokerRoleArn: result.brokerRoleArn, account: updated, ...extras };
     }
     const created: ConnectedAccount = {
@@ -263,6 +330,7 @@ export class BrokerService {
       createdAt: this.now(),
     };
     await this.store.addAccount(created);
+    this.maintainFor(created);
     return { brokerRoleArn: result.brokerRoleArn, account: created, ...extras };
   }
 
@@ -296,6 +364,7 @@ export class BrokerService {
     const account = (await this.store.listAccounts()).find((a) => a.id === accountId);
     if (!account) throw new BrokerError("not_found", `account ${accountId} not found`);
     if (!account.roleArn) throw new BrokerError("bad_request", "account has no roleArn to verify");
+    this.maintainFor(account);
     return this.aws.verifyRole(account.roleArn, regionFor(account));
   }
 
@@ -645,6 +714,7 @@ export class BrokerService {
   }> {
     const c = await this.getConnection(id);
     const account = await this.accountFor(c);
+    this.maintainFor(account);
     // Drifted-credential guard: the operator chain (env vars / default profile / SSO) can
     // silently point at a DIFFERENT AWS account than the one this connection was made
     // against — and the same app deployed there would carry the same tags, so the sweep
@@ -759,6 +829,7 @@ export class BrokerService {
     const limit = opts.limit ?? 100;
 
     const accounts = await this.store.listAccounts();
+    this.maintainFor(accounts[0]);
     const brokerRoleName =
       accounts.map((a) => roleNameFromArn(a.roleArn)).find((n): n is string => !!n) ?? DEFAULT_ROLE_NAME;
     // Per-region; us-east-1 also collects global-service events (IAM, STS).

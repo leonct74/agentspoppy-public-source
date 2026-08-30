@@ -44,7 +44,14 @@ function fakeGateway(opts: {
   denyOriginUpdate?: boolean;
   /** What the origin stack settles to after a cross-region re-apply. */
   originStackAfterUpdate?: DescribedStack;
-} = {}): BootstrapGateway & { log: string[]; created: AwsKeyInput[]; deletedKeys: string[] } {
+  /** Make the freshly-minted key fail verification (never assumable) — mint-then-verify guard. */
+  failKeyVerify?: boolean;
+} = {}): BootstrapGateway & {
+  log: string[];
+  created: AwsKeyInput[];
+  deletedKeys: string[];
+  verified: string[];
+} {
   const timeline = [...(opts.initialStacks ?? [null])];
   let current: DescribedStack | null = timeline.shift() ?? null;
   // Creation order = array order (older first), matching IAM's CreateDate semantics.
@@ -52,6 +59,7 @@ function fakeGateway(opts: {
   const log: string[] = [];
   const created: AwsKeyInput[] = [];
   const deletedKeys: string[] = [];
+  const verified: string[] = [];
   let keyCounter = 0;
   let originCurrent: DescribedStack | null = opts.originStack ?? null;
 
@@ -63,6 +71,7 @@ function fakeGateway(opts: {
     log,
     created,
     deletedKeys,
+    verified,
     async whoAmI() {
       const acct = opts.accountId ?? ACCOUNT;
       return { accountId: acct, arn: opts.callerArn ?? `arn:aws:iam::${acct}:user/admin`, userId: "U" };
@@ -105,7 +114,12 @@ function fakeGateway(opts: {
     async createAccessKey() {
       const k = { accessKeyId: `AKIANEW${keyCounter++}`, secretAccessKey: "fresh-secret" };
       created.push(k);
+      keys = [...keys, { accessKeyId: k.accessKeyId, createDate: new Date(2030, 0, keyCounter) }];
       return k;
+    },
+    async verifyOperatorKey(_roleArn, key) {
+      verified.push(key.accessKeyId);
+      if (opts.failKeyVerify) throw new Error("InvalidClientTokenId: the security token is invalid");
     },
     async findExistingBrokerResources() {
       return opts.existingNamed ?? { role: false, user: false };
@@ -122,7 +136,7 @@ function fakeGateway(opts: {
 
 const noSleep = async () => {};
 // Every test opts out of reading the developer's real ~/.aws profile.
-const baseOpts = { sleep: noSleep, readLocalKeyId: () => null };
+const baseOpts = { sleep: noSleep, readLocalKeyId: () => null, recordKey: () => {} };
 
 describe("runBootstrap", () => {
   it("creates the stack, mints a fresh operator key, and writes ONLY that key", async () => {
@@ -177,14 +191,79 @@ describe("runBootstrap", () => {
     expect(res.brokerRoleArn).toContain("AgentsPoppyBroker");
   });
 
-  it("evicts only the OLDEST key when the operator is at IAM's 2-key limit", async () => {
-    // Two keys we can't identify as ours (no local profile): keep the newer (it may belong to
-    // another machine), retire the oldest to free the slot, mint ours.
+  it("refuses to evict another machine's key without explicit consent", async () => {
+    // Two keys we can't identify as ours, at IAM's 2-key limit: deleting one may disconnect
+    // a live machine, so the run stops and NAMES the key instead of silently retiring it
+    // (docs/specs/operator-key-least-privilege.md). Nothing is deleted, nothing minted.
     const gw = fakeGateway({ initialStacks: [COMPLETE], existingKeyIds: ["AKIAOLD1", "AKIAOLD2"] });
-    const res = await runBootstrap(gw, { setup: SETUP, region: "eu-west-1" }, { ...baseOpts, writeProfile: () => {} });
+    await expect(
+      runBootstrap(gw, { setup: SETUP, region: "eu-west-1" }, { ...baseOpts, writeProfile: () => {} }),
+    ).rejects.toThrow(/AKIAOLD1/);
+    expect(gw.deletedKeys).toEqual([]);
+    expect(gw.created).toHaveLength(0);
+  });
+
+  it("evicts only the OLDEST key when the operator is at the 2-key limit and eviction is confirmed", async () => {
+    // Same state, but the UI confirmed: keep the newer (it may belong to another machine),
+    // retire the oldest to free the slot, mint ours.
+    const gw = fakeGateway({ initialStacks: [COMPLETE], existingKeyIds: ["AKIAOLD1", "AKIAOLD2"] });
+    const res = await runBootstrap(
+      gw,
+      { setup: SETUP, region: "eu-west-1", allowEviction: true },
+      { ...baseOpts, writeProfile: () => {} },
+    );
     expect(gw.deletedKeys).toEqual(["AKIAOLD1"]);
     expect(gw.created).toHaveLength(1);
     expect(res.evictedAccessKeyId).toBe("AKIAOLD1");
+  });
+
+  it("verifies a freshly-minted key BEFORE writing it, and rolls back on failure", async () => {
+    // Mint-then-verify-then-write: a key that can't assume the role must never reach disk
+    // (docs/specs/operator-key-least-privilege.md §1).
+    const written: AwsKeyInput[] = [];
+    const gw = fakeGateway({ initialStacks: [COMPLETE], failKeyVerify: true });
+    await expect(
+      runBootstrap(gw, { setup: SETUP, region: "eu-west-1" }, { ...baseOpts, writeProfile: (k) => written.push(k) }),
+    ).rejects.toThrow(/could not assume the broker role|security token/i);
+    expect(gw.verified).toHaveLength(1); // it tried
+    expect(written).toHaveLength(0); // …but nothing was written
+    expect(gw.deletedKeys).toContain(gw.created[0]!.accessKeyId); // the bad key was cleaned up
+  });
+
+  it("keys-first (step 0): switches the key against an existing stack, template best-effort", async () => {
+    // A machine standing on a setup key: mint+verify+write the operator key first; the template
+    // re-apply is secondary and its failure must NOT undo the key switch.
+    const written: AwsKeyInput[] = [];
+    const recorded: string[] = [];
+    const gw = fakeGateway({ initialStacks: [COMPLETE] });
+    const res = await runBootstrap(
+      gw,
+      { setup: SETUP, region: "eu-west-1", keysFirst: true },
+      { ...baseOpts, writeProfile: (k) => written.push(k), recordKey: (id) => recorded.push(id) },
+    );
+    expect(written).toHaveLength(1);
+    expect(recorded).toEqual([res.operatorAccessKeyId]);
+    expect(gw.verified).toEqual([res.operatorAccessKeyId!]);
+    expect(res.brokerRoleArn).toContain("AgentsPoppyBroker");
+  });
+
+  it("keys-first still switches the key when the template re-apply rolls back", async () => {
+    // The 0.3.8-recovery population: their stack update rolls back (old access policy), but the
+    // key switch is the important half and must complete — the template failure is reported.
+    const written: AwsKeyInput[] = [];
+    const gw = fakeGateway({
+      initialStacks: [COMPLETE],
+      updateRollsBackTo: { ...COMPLETE, status: "UPDATE_ROLLBACK_COMPLETE" },
+      failureReason: "AgentsPoppyBoundary: not authorized to perform: iam:CreatePolicy",
+    });
+    const res = await runBootstrap(
+      gw,
+      { setup: SETUP, region: "eu-west-1", keysFirst: true },
+      { ...baseOpts, writeProfile: (k) => written.push(k) },
+    );
+    expect(written).toHaveLength(1); // the key WAS switched
+    expect(res.setupNotUpdated).toBe(true);
+    expect(res.setupUpdateError).toMatch(/iam:CreatePolicy|rolled back/i);
   });
 
   it("replaces only THIS machine's key — another computer's key survives a re-setup", async () => {

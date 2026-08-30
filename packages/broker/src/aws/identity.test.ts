@@ -19,6 +19,6 @@ describe("StubAwsBootstrap", () => {
 
   it("verifyRole echoes an assumed ARN", async () => {
     const res = await new StubAwsBootstrap().verifyRole("arn:aws:iam::1:role/AP", "us-east-1");
-    expect(res).toEqual({ ok: true, assumedArn: "arn:aws:iam::1:role/AP/agentspoppy-verify" });
+    expect(res).toEqual({ ok: true, assumedArn: "arn:aws:iam::1:role/AP/AgentsPoppyHost-verify" });
   });
 });

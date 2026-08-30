@@ -289,6 +289,15 @@ export const broker = {
    * `unknown`, which prompts but says "couldn't check" rather than crying wolf.
    */
   setupStatus: () => req<SetupVersionStatus>("/aws/setup-status"),
+  /** This machine's operator-key id + mint time (never secrets) — the key-age nudge. */
+  operatorKeyInfo: () => req<{ profileKeyId: string | null; mintedAt: string | null }>("/aws/key-info"),
+  /**
+   * The kill switch: delete THIS machine's operator access key in AWS, then forget it
+   * locally. 409 not_operator → route to the key switch; 409 setup_outdated → re-apply
+   * setup first. A failed delete never touches the stored profile.
+   */
+  revokeOperatorKey: () =>
+    req<{ deletedKeyId: string; alreadyGone: boolean }>("/aws/revoke-key", { method: "POST" }),
   createAccount: (input: { accountId: string; alias?: string; regions?: string[]; roleArn?: string }) =>
     req<ConnectedAccount>("/accounts", {
       method: "POST",
@@ -314,6 +323,12 @@ export const broker = {
       region?: string;
       /** Re-apply: touch the stack only — never rotate the stored credential. */
       updateOnly?: boolean;
+      /** Step 0: switch this machine onto the operator key BEFORE touching the template
+       *  (docs/specs/operator-key-least-privilege.md). */
+      keysFirst?: boolean;
+      /** Consent to retire the oldest other operator key at IAM's two-key limit —
+       *  only send after showing the user which key (the eviction_required error names it). */
+      allowEviction?: boolean;
     },
   ) =>
     req<{
@@ -323,6 +338,8 @@ export const broker = {
       joinedExistingSetupIn?: string;
       /** Present when the machine was connected but the setup template could NOT be re-applied. */
       setupNotUpdated?: boolean;
+      /** When `setupNotUpdated` came from a thrown failure (keys-first mode): the reason. */
+      setupUpdateError?: string;
       /** Present when the oldest operator key was retired to stay within IAM's 2-key limit. */
       evictedAccessKeyId?: string;
     }>(

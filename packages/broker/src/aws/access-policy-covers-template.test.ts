@@ -72,6 +72,33 @@ describe("the scoped access policy covers the bootstrap template", () => {
     expect(covering.length, `no Allow of ${create} on ${arn} in the access policy`).toBeGreaterThan(0);
   });
 
+  // Re-apply is an UPDATE, and CloudFormation modifies resources in place — so the policy
+  // must also cover the update-path action for every MUTABLE property the template carries.
+  // The create-path checks above would stay green if these were trimmed, and the failure
+  // would be a silent rollback on the very users who followed the least-privilege advice
+  // (docs/specs/operator-key-least-privilege.md — the tripwire only gated creation).
+  it.each([
+    { action: "iam:UpdateAssumeRolePolicy", arn: "arn:aws:iam::*:role/AgentsPoppyBroker", why: "trust-policy changes" },
+    { action: "iam:PutUserPolicy", arn: "arn:aws:iam::*:user/AgentsPoppyOperator", why: "operator inline-policy changes" },
+    { action: "iam:DeleteUserPolicy", arn: "arn:aws:iam::*:user/AgentsPoppyOperator", why: "operator inline-policy removal" },
+    { action: "iam:CreatePolicyVersion", arn: "arn:aws:iam::*:policy/AgentsPoppyBoundary", why: "boundary document changes" },
+    { action: "iam:PutRolePolicy", arn: "arn:aws:iam::*:role/AgentsPoppyBroker", why: "broker inline-policy changes" },
+  ])("grants $action ($why)", ({ action, arn }) => {
+    const covering = policy().Statement.filter(
+      (s) => s.Effect === "Allow" && asArray(s.Resource).includes(arn) && asArray(s.Action).includes(action),
+    );
+    expect(covering.length, `no Allow of ${action} on ${arn} in the access policy`).toBeGreaterThan(0);
+  });
+
+  // The setup key must NOT keep standing powers over the deployed system: after template
+  // v4, hop-1 is the operator's alone, and the access policy's old sts:AssumeRole line
+  // would be inert anyway — a re-added one would silently widen the setup key again.
+  it("gives the setup key no sts:AssumeRole", () => {
+    for (const s of policy().Statement) {
+      expect(asArray(s.Action), `statement ${s.Sid ?? "?"} grants sts:AssumeRole`).not.toContain("sts:AssumeRole");
+    }
+  });
+
   // The app ships its own copy for the "copy this policy" panel. release-check enforces
   // this too, but that runs at release time — a drifted copy is worth failing on now.
   it("keeps the app's bundled copy identical to the source of truth", () => {

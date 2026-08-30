@@ -9,6 +9,7 @@ import { Disclosure } from "../components/Disclosure";
 import { Icon } from "../components/Icon";
 import { PoppySpinner } from "../components/PoppySpinner";
 import { SetupWizard } from "./SetupWizard";
+import { KeySecurityPanel } from "../components/KeySecurityPanel";
 import {
   ACCESS_POLICY_URL,
   AWS_CLI_URL,
@@ -96,6 +97,10 @@ export function ConnectAwsView({ accounts, onBack, onChanged, initialAction }: C
   const [useOwnKeys, setUseOwnKeys] = useState(false);
   const [deploying, setDeploying] = useState(false);
   const [deployError, setDeployError] = useState<string | null>(null);
+  // The two-key-limit eviction gate: the broker refused to delete another machine's key
+  // without consent; the prompt names it, and confirming retries with allowEviction.
+  const [evictionPrompt, setEvictionPrompt] = useState<string | null>(null);
+  const [allowEviction, setAllowEviction] = useState(false);
   /**
    * A re-apply that CloudFormation rolled back on `iam:CreatePolicy` means one thing: the
    * AgentsPoppy policy attached to this IAM user predates the permissions boundary. The panel
@@ -274,22 +279,32 @@ export function ConnectAwsView({ accounts, onBack, onChanged, initialAction }: C
       // (A re-apply reuses them too; if they're the non-admin operator the deploy
       // fails and the user can switch to "different credentials".)
       const pasteKeys = useOwnKeys || !hasIdentity;
-      const { brokerRoleArn, joinedExistingSetupIn, setupNotUpdated, evictedAccessKeyId } = await broker.deployBootstrap(
-        account?.id ?? null,
-        // On a re-apply the run must touch the STACK only. Without updateOnly it also rotated
-        // the operator key and overwrote this machine's working credential — the user returned
-        // from a successful security update disconnected (field report 2026-08-28).
-        pasteKeys
-          ? {
-              accessKeyId: setupKeyId.trim(),
-              secretAccessKey: setupKeySecret.trim(),
-              sessionToken: setupKeyToken.trim() || undefined,
-              ...(redeploy ? { updateOnly: true } : {}),
-            }
-          : redeploy
-            ? { updateOnly: true }
-            : undefined,
-      );
+      // On a re-apply, WHICH mode depends on what this machine is standing on
+      // (docs/specs/operator-key-least-privilege.md, ordering §3):
+      //  - operator key → touch the STACK only (updateOnly). Rotating the key here is
+      //    what disconnected a user mid-update (field report 2026-08-28).
+      //  - anything else → the machine is on a powerful setup key; switch the KEY FIRST
+      //    (mint + verify + store the operator key), then apply the template — after v4 a
+      //    non-operator key can't assume the role, so updating first would strand it.
+      const redeployMode: { updateOnly?: boolean; keysFirst?: boolean; allowEviction?: boolean } = redeploy
+        ? connectedIsOperator
+          ? { updateOnly: true }
+          : { keysFirst: true, ...(allowEviction ? { allowEviction: true } : {}) }
+        : {};
+      const { brokerRoleArn, joinedExistingSetupIn, setupNotUpdated, setupUpdateError, evictedAccessKeyId } =
+        await broker.deployBootstrap(
+          account?.id ?? null,
+          pasteKeys
+            ? {
+                accessKeyId: setupKeyId.trim(),
+                secretAccessKey: setupKeySecret.trim(),
+                sessionToken: setupKeyToken.trim() || undefined,
+                ...redeployMode,
+              }
+            : redeploy
+              ? redeployMode
+              : undefined,
+        );
       // Any pasted setup creds are done with — drop them from the form too.
       setSetupKeySecret("");
       setSetupKeyToken("");
@@ -310,6 +325,17 @@ export function ConnectAwsView({ accounts, onBack, onChanged, initialAction }: C
               : ""),
         );
       }
+      if (setupUpdateError) {
+        // Keys-first: the KEY switch succeeded but the template re-apply failed. Both
+        // halves are said plainly — claiming either more or less than happened is how
+        // users end up acting on the wrong half.
+        setDeployNote(
+          `This computer was switched to the restricted operator key. The setup template itself could NOT ` +
+            `be re-applied though: ${setupUpdateError}`,
+        );
+      }
+      setAllowEviction(false);
+      setEvictionPrompt(null);
       setRoleArn(brokerRoleArn);
       if (redeploy) setUpdateDone(true); // stay on the update screen, showing the result
       else setRedeploy(false);
@@ -319,9 +345,16 @@ export function ConnectAwsView({ accounts, onBack, onChanged, initialAction }: C
       // that fails would wrongly flip step 1 back to "not done" and re-expand it. Step 1
       // stays complete; the new operator key is exercised by the verify step instead.
     } catch (e) {
-      setDeployError(
-        msg(e, "Setup didn't finish. Nothing elevated was saved — click Deploy to resume."),
-      );
+      if (e instanceof ApiError && e.code === "eviction_required") {
+        // Making room for the new key would delete another machine's — never silently.
+        // The message names the key + its age; confirming retries with allowEviction.
+        setEvictionPrompt(e.message);
+        setAllowEviction(true);
+      } else {
+        setDeployError(
+          msg(e, "Setup didn't finish. Nothing elevated was saved — click Deploy to resume."),
+        );
+      }
     } finally {
       setDeploying(false);
     }
@@ -492,7 +525,9 @@ export function ConnectAwsView({ accounts, onBack, onChanged, initialAction }: C
                       ) : null}{" "}
                       — <strong>just this once</strong> —{" "}
                       {redeploy
-                        ? "to update the setup in place. Nothing to re-enter."
+                        ? connectedIsOperator
+                          ? "to update the setup in place. Nothing to re-enter."
+                          : "to first switch this computer onto the restricted operator key (the key connected right now is a powerful setup key, which shouldn't be the everyday one), then update the setup in place. Nothing to re-enter."
                         : "to create the broker role + non-admin operator, then switch to that operator and stop using the elevated access."}
                     </p>
                     <button className="btn btn-primary" disabled={deploying} onClick={() => void deployBootstrap()}>
@@ -610,6 +645,25 @@ export function ConnectAwsView({ accounts, onBack, onChanged, initialAction }: C
                       </button>
                     )}
                   </>
+                )}
+                {evictionPrompt && (
+                  <div className="inline-warning" role="alert">
+                    <p>{evictionPrompt}</p>
+                    <button className="btn btn-primary" disabled={deploying} onClick={() => void deployBootstrap()}>
+                      Delete that key and continue
+                    </button>
+                    <button
+                      className="btn link"
+                      type="button"
+                      disabled={deploying}
+                      onClick={() => {
+                        setEvictionPrompt(null);
+                        setAllowEviction(false);
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
                 )}
                 {deployError && <p className="inline-error">{deployError}</p>}
                 <p className="micro muted">
@@ -1181,29 +1235,29 @@ export function ConnectAwsView({ accounts, onBack, onChanged, initialAction }: C
           )}
           {verify && !verify.ok &&
             (isAssumeRoleDenied(verify.reason) ? (
-              <div className="inline-error">
-                <strong>This user's policy is missing a permission.</strong>
-                <p>
-                  The AWS user you connected isn't allowed to assume AgentsPoppy's broker role — the role trusts your
-                  whole account, so this is an <em>IAM policy</em> on the user, not a re-setup. Replace its policy with
-                  the current one:
-                </p>
-                <ol className="substeps">
-                  <li>
-                    <CopyPolicyButton /> — or{" "}
-                    <ExtLink href={ACCESS_POLICY_URL}>
-                      open it on GitHub <Icon name="external" className="link-ext" />
-                    </ExtLink>
-                    .
-                  </li>
-                  <li>
-                    In AWS: <strong>IAM → Users → your user</strong> → open the AgentsPoppy policy, <strong>replace</strong>{" "}
-                    it with what you copied, and save.
-                  </li>
-                  <li>Come back and Verify again.</li>
-                </ol>
-                <p className="micro muted">AWS said: {verify.reason}</p>
-              </div>
+              connectedIsOperator ? (
+                <div className="inline-error">
+                  <strong>The operator key was refused by your setup.</strong>
+                  <p>
+                    This machine is on the right key (<code>AgentsPoppyOperator</code>), but your AWS setup
+                    wouldn't let it in — usually the setup is from an older version, or its role was changed
+                    outside AgentsPoppy. Re-applying setup (an in-place update with your setup credentials)
+                    restores it.
+                  </p>
+                  <p className="micro muted">AWS said: {verify.reason}</p>
+                </div>
+              ) : (
+                <div className="inline-error">
+                  <strong>This machine is connected with a setup key, not the operator key.</strong>
+                  <p>
+                    Only the restricted <code>AgentsPoppyOperator</code> key may operate the broker role —
+                    that's what stops a powerful key being used (or stolen) for everyday work. Run{" "}
+                    <strong>Update setup</strong>: it switches this computer onto the operator key using the
+                    credentials already connected, then verifies again. Nothing to re-enter.
+                  </p>
+                  <p className="micro muted">AWS said: {verify.reason}</p>
+                </div>
+              )
             ) : (
               <p className="inline-error">Couldn't assume the role: {verify.reason}</p>
             ))}
@@ -1228,6 +1282,11 @@ export function ConnectAwsView({ accounts, onBack, onChanged, initialAction }: C
           </button>
         </div>
       )}
+
+      {/* The everyday key's own controls — age nudge + the kill switch. Only meaningful when
+          this machine is actually standing on the operator key (the panel hides itself when
+          no key is stored; the broker refuses a revoke from any other identity). */}
+      {connectedIsOperator && <KeySecurityPanel onRevoked={onChanged} />}
     </section>
   );
 }

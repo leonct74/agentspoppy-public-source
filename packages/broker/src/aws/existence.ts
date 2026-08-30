@@ -16,7 +16,7 @@
  * returns `unverified` rather than guessing, so we never invent a leftover OR hide one.
  */
 import type { InfraNodeStatus } from "@agentspoppy/core";
-import { operatorCredentials } from "./credentials";
+import { maintenanceCredentials } from "./maintenance";
 
 /** Resolves a tagged ARN to whether it still exists. */
 export interface ExistenceVerifier {
@@ -73,7 +73,7 @@ export function ec2AwareExistenceVerifier(
       if (!instanceId) return fallback.verify(region, arn);
       try {
         const { EC2Client, DescribeInstancesCommand } = await import("@aws-sdk/client-ec2");
-        const client = new EC2Client({ region, credentials: await operatorCredentials() });
+        const client = new EC2Client({ region, credentials: await maintenanceCredentials() });
         const res = await client.send(new DescribeInstancesCommand({ InstanceIds: [instanceId] }));
         return ec2StateToStatus(res.Reservations?.[0]?.Instances?.[0]?.State?.Name);
       } catch (err) {
@@ -98,7 +98,7 @@ export function cloudTrailExistenceVerifier(): ExistenceVerifier {
       if (!name) return "unverified";
       try {
         const { CloudTrailClient, LookupEventsCommand } = await import("@aws-sdk/client-cloudtrail");
-        const client = new CloudTrailClient({ region, credentials: await operatorCredentials() });
+        const client = new CloudTrailClient({ region, credentials: await maintenanceCredentials() });
         const res = await client.send(
           new LookupEventsCommand({
             LookupAttributes: [{ AttributeKey: "ResourceName", AttributeValue: name }],

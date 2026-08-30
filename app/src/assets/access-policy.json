@@ -103,14 +103,6 @@
       "Resource": "arn:aws:iam::*:user/AgentsPoppyOperator"
     },
     {
-      "Sid": "AssumeBrokerRole",
-      "Effect": "Allow",
-      "Action": [
-        "sts:AssumeRole"
-      ],
-      "Resource": "arn:aws:iam::*:role/AgentsPoppyBroker"
-    },
-    {
       "Sid": "MonitorAndTeardown",
       "Effect": "Allow",
       "Action": [

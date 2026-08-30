@@ -95,23 +95,55 @@ describe("roleCloudFormationTemplate", () => {
     expect(json).toContain('"CannotManageIamUsersOrAccount"');
     expect(json).toContain('"CannotAttachAdminPolicies"');
     expect(json).toContain('"CannotDisableAuditLogging"');
-    // The operator can only assume + monitor, never act as admin.
+    // Template v4: the operator is assume-only — its former direct cloudformation:DeleteStack
+    // (and the whole cleanup set) moved to the broker role's session policy
+    // (docs/specs/operator-key-least-privilege.md), so it must NO LONGER appear on the user.
     expect(json).toContain("sts:AssumeRole");
-    expect(json).toContain("cloudformation:DeleteStack");
+    const tpl = roleCloudFormationTemplate({ operatorAccountId: "123456789012" }) as {
+      Resources: Record<string, { Type: string; Properties: { Policies?: { PolicyDocument: unknown }[] } }>;
+    };
+    const opDoc = JSON.stringify(tpl.Resources.AgentsPoppyOperator!.Properties.Policies![0]!.PolicyDocument);
+    expect(opDoc).not.toContain("cloudformation:DeleteStack");
+    expect(opDoc).not.toContain("s3:DeleteBucket");
   });
 
-  it("keeps the operator minimal — it never gains any iam:* permission of its own", () => {
+  it("keeps the operator ASSUME-ONLY — its only iam power is self-revoke of its own key", () => {
     const tpl = roleCloudFormationTemplate({ operatorAccountId: "123456789012" }) as Record<string, unknown>;
     const resources = tpl.Resources as Record<string, { Properties: Record<string, unknown> }>;
     const op = resources.AgentsPoppyOperator?.Properties as {
-      Policies: { PolicyDocument: { Statement: { Action: string | string[] }[] } }[];
+      Policies: { PolicyDocument: { Statement: { Sid?: string; Action: string | string[]; Resource: unknown }[] } }[];
     };
-    const actions = op.Policies[0]!.PolicyDocument.Statement.flatMap((s) =>
-      Array.isArray(s.Action) ? s.Action : [s.Action],
-    );
-    // Per-connection scope policies are created within a bounded broker-role session,
-    // not by the operator — so the operator stays powerless (assume + monitor only).
-    expect(actions.some((a) => a.startsWith("iam:"))).toBe(false);
+    const statements = op.Policies[0]!.PolicyDocument.Statement;
+    const actions = statements.flatMap((s) => (Array.isArray(s.Action) ? s.Action : [s.Action]));
+    // Exactly one iam: action — DeleteAccessKey, the kill switch (self-DoS only). No
+    // iam:CreateAccessKey anywhere, so a revoked key can never be replaced except by re-setup.
+    const iamActions = actions.filter((a) => a.startsWith("iam:"));
+    expect(iamActions).toEqual(["iam:DeleteAccessKey"]);
+    // And it is scoped to the operator's OWN user, not "*".
+    const selfRevoke = statements.find((s) => s.Sid === "SelfRevoke")!;
+    expect(JSON.stringify(selfRevoke.Resource)).toContain("user/AgentsPoppyOperator");
+    // The cleanup/monitor set is gone from the user entirely.
+    expect(actions.some((a) => a.startsWith("cloudformation:") && a !== "sts:AssumeRole")).toBe(false);
+  });
+
+  it("v4 trust policy admits the operator's long-term key (HopOne) and the role's self-re-assume (HopTwo)", () => {
+    const tpl = roleCloudFormationTemplate({ operatorAccountId: "123456789012" }) as {
+      Resources: Record<string, { Type: string; Properties: { AssumeRolePolicyDocument?: { Statement: any[] } } }>;
+    };
+    const trust = tpl.Resources.AgentsPoppyRole!.Properties.AssumeRolePolicyDocument!;
+    const hop1 = trust.Statement.find((s) => s.Sid === "HopOne")!;
+    const hop2 = trust.Statement.find((s) => s.Sid === "HopTwo")!;
+    // HopOne: pinned to the operator USER arn + long-term-credential-only (TokenIssueTime null),
+    // which is what makes key revocation terminal against a pre-minted GetSessionToken session.
+    expect(hop1.Condition.ArnEquals["aws:PrincipalArn"]).toContain("user/AgentsPoppyOperator");
+    expect(hop1.Condition.Null["aws:TokenIssueTime"]).toBe("true");
+    // HopTwo: the vend's role-chaining re-assume — aws:PrincipalArn is the ROLE arn here.
+    expect(hop2.Condition.ArnEquals["aws:PrincipalArn"]).toContain("role/AgentsPoppyBroker");
+    // Both keep TagSession (the vend stamps tags) and gain SetSourceIdentity.
+    for (const s of [hop1, hop2]) {
+      expect(s.Action).toContain("sts:TagSession");
+      expect(s.Action).toContain("sts:SetSourceIdentity");
+    }
   });
 });
 

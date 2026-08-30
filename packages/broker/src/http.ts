@@ -51,6 +51,10 @@ function statusForError(code: BrokerErrorCodeLike): number {
       return 400;
     case "account_unreadable":
       return 502; // upstream (AWS) couldn't be read — creds/permissions, not a client error
+    case "eviction_required": // needs explicit consent — the UI confirms and retries
+    case "not_operator": // wrong standing identity — the UI routes to the key switch
+    case "setup_outdated": // deployed template predates the capability — re-apply first
+      return 409;
     default:
       return 500;
   }
@@ -149,6 +153,17 @@ export async function handle(
       return send(res, 200, await service.getSetupStatus());
     }
 
+    // /aws/key-info — this machine's operator-key id + mint time. Never secrets.
+    if (parts[0] === "aws" && parts[1] === "key-info" && parts.length === 2 && method === "GET") {
+      return send(res, 200, await service.getOperatorKeyInfo());
+    }
+
+    // /aws/revoke-key — the kill switch: delete THIS machine's operator key in AWS,
+    // then forget it locally (that order; a failed delete leaves the profile alone).
+    if (parts[0] === "aws" && parts[1] === "revoke-key" && parts.length === 2 && method === "POST") {
+      return send(res, 200, await service.revokeOperatorKey());
+    }
+
     // /aws/bootstrap — AUTOMATED setup with NO account linked yet (fresh machine):
     // derive + upsert the account from the setup creds. In-memory creds, never persisted.
     if (parts[0] === "aws" && parts[1] === "bootstrap" && parts.length === 2 && method === "POST") {
@@ -198,9 +213,25 @@ export async function handle(
       // creds (in-memory only, never persisted). Idempotent / resumable.
       if (parts[2] === "bootstrap" && method === "POST") {
         const b = (await readJsonBody(req)) as
-          | { accessKeyId?: string; secretAccessKey?: string; sessionToken?: string; updateOnly?: boolean }
+          | {
+              accessKeyId?: string;
+              secretAccessKey?: string;
+              sessionToken?: string;
+              updateOnly?: boolean;
+              /** Step 0: switch this machine onto the operator key before touching the template. */
+              keysFirst?: boolean;
+              /** Consent to retire the oldest other key at IAM's two-key limit. */
+              allowEviction?: boolean;
+            }
           | undefined;
-        return send(res, 200, await service.deployBootstrap(id, setupFromBody(b), undefined, b?.updateOnly === true));
+        return send(
+          res,
+          200,
+          await service.deployBootstrap(id, setupFromBody(b), undefined, b?.updateOnly === true, {
+            keysFirst: b?.keysFirst === true,
+            allowEviction: b?.allowEviction === true,
+          }),
+        );
       }
       if (parts[2] === "role" && method === "POST") {
         const b = (await readJsonBody(req)) as { roleArn?: string } | undefined;

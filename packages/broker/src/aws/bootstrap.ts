@@ -28,6 +28,8 @@
 import {
   operatorCredentials,
   readAgentsPoppyProfileKeyId,
+  readOperatorKeyRecord,
+  recordOperatorKey,
   writeAgentsPoppyProfile,
   type AwsKeyInput,
 } from "./credentials";
@@ -63,6 +65,39 @@ export interface BootstrapInput {
    * operator user, whose key genuinely must be minted.
    */
   updateOnly?: boolean;
+  /**
+   * Step 0 (docs/specs/operator-key-least-privilege.md): the machine is standing on a
+   * NON-operator key and needs to switch. Keys come FIRST — mint, verify, write — and the
+   * template re-apply afterwards is allowed to fail independently (`setupNotUpdated`),
+   * because the population this serves includes users whose stack update would roll back
+   * (old access policy) and they must still get their key switched. Requires the setup
+   * stack to already exist; falls through to the normal flow when it doesn't.
+   */
+  keysFirst?: boolean;
+  /**
+   * Explicit consent to delete the OLDEST other operator key when the user is at IAM's
+   * 2-access-key limit. Without it the run stops with {@link EvictionRequiredError} so the
+   * UI can name the key (id + age) before another machine is silently disconnected.
+   */
+  allowEviction?: boolean;
+}
+
+/**
+ * Making room for a new key would delete another machine's — stop and ask first.
+ * The UI confirms and retries with `allowEviction: true`.
+ */
+export class EvictionRequiredError extends Error {
+  constructor(
+    readonly accessKeyId: string,
+    readonly createDate?: Date,
+  ) {
+    super(
+      `The operator user is at AWS's two-access-key limit. Continuing will delete the oldest other key ` +
+        `(${accessKeyId}${createDate ? `, created ${createDate.toISOString().slice(0, 10)}` : ""}) — ` +
+        `if another computer still uses it, that computer will need to run setup again.`,
+    );
+    this.name = "EvictionRequiredError";
+  }
 }
 
 export interface BootstrapResult {
@@ -90,6 +125,8 @@ export interface BootstrapResult {
    * works; it is simply still the old version, and saying so is the whole point.
    */
   setupNotUpdated?: boolean;
+  /** When `setupNotUpdated` came from a thrown failure (keys-first mode): the reason, verbatim. */
+  setupUpdateError?: string;
 }
 
 export interface DescribedStack {
@@ -117,6 +154,15 @@ export interface BootstrapGateway {
   listAccessKeys(userName: string): Promise<OperatorAccessKey[]>;
   deleteAccessKey(userName: string, accessKeyId: string): Promise<void>;
   createAccessKey(userName: string): Promise<{ accessKeyId: string; secretAccessKey: string }>;
+  /**
+   * Prove a freshly-minted operator key can actually assume the broker role BEFORE it is
+   * written to disk — never trade a working key for a broken one. Must retry the
+   * propagation window of a seconds-old key (IAM is eventually consistent; the failure
+   * wording is InvalidClientTokenId / "security token … is invalid", which is a DIFFERENT
+   * error family from the managed-policy lag sts.ts retries). Optional: a gateway that
+   * can't verify skips the check rather than blocking the mint.
+   */
+  verifyOperatorKey?(roleArn: string, key: { accessKeyId: string; secretAccessKey: string }): Promise<void>;
   /**
    * Whether the named, account-GLOBAL IAM resources the setup stack would create already
    * exist. Used to give a clear message when a setup in another region already made them
@@ -175,6 +221,8 @@ export interface BootstrapOptions {
    * replaces only its own key and never bricks another computer's.
    */
   readLocalKeyId?: () => string | null;
+  /** Injected for tests; defaults to the real ~/.agentspoppy key record (id + mint time). */
+  recordKey?: (accessKeyId: string) => void;
   /** Poll cadence + ceiling for CloudFormation waits. */
   pollMs?: number;
   maxPolls?: number;
@@ -194,7 +242,8 @@ export async function runBootstrap(
 ): Promise<BootstrapResult> {
   const sleep = opts.sleep ?? defaultSleep;
   const writeProfile = opts.writeProfile ?? writeAgentsPoppyProfile;
-  const readLocalKeyId = opts.readLocalKeyId ?? readAgentsPoppyProfileKeyId;
+  const readLocalKeyId = opts.readLocalKeyId ?? defaultReadLocalKeyId;
+  const recordKey = opts.recordKey ?? recordOperatorKey;
   const pollMs = opts.pollMs ?? 3000;
   const maxPolls = opts.maxPolls ?? 120; // 6 min ceiling at 3s — IAM stacks are fast
 
@@ -205,6 +254,48 @@ export async function runBootstrap(
     throw new Error(
       `These credentials are for account ${who.accountId}, but you're connecting account ${input.expectedAccountId}.`,
     );
+  }
+
+  // Step 0 — the machine is standing on a non-operator key and the setup already exists:
+  // switch the KEY first, and let the template re-apply fail independently afterwards.
+  // A user whose stack update would roll back (old access policy) still gets switched.
+  if (input.keysFirst) {
+    const read = await readSetupStack(gw, input.region);
+    if (read.ok) {
+      const brokerRoleArn = read.outputs.BrokerRoleArn;
+      const operatorUserName = read.outputs.OperatorUserName ?? DEFAULT_OPERATOR_NAME;
+      if (!brokerRoleArn) throw new Error("The setup stack exists but did not return a Broker Role ARN.");
+      const minted = await reconcileOperatorKey(
+        gw,
+        input,
+        operatorUserName,
+        brokerRoleArn,
+        writeProfile,
+        readLocalKeyId,
+        recordKey,
+      );
+      // Now the template — best-effort. Failure here must not undo the key switch.
+      let notUpdated = false;
+      let updateError: string | undefined;
+      try {
+        const applied = await ensureStack(gw, who.accountId, who.arn, input.region, sleep, pollMs, maxPolls);
+        notUpdated = applied.notUpdated ?? false;
+      } catch (err) {
+        notUpdated = true;
+        updateError = (err as Error).message;
+      }
+      return {
+        accountId: who.accountId,
+        brokerRoleArn,
+        operatorUserName,
+        operatorAccessKeyId: minted.accessKeyId,
+        ...(notUpdated ? { setupNotUpdated: true } : {}),
+        ...(updateError ? { setupUpdateError: updateError } : {}),
+        ...(minted.evictedAccessKeyId ? { evictedAccessKeyId: minted.evictedAccessKeyId } : {}),
+      };
+    }
+    // No readable stack → nothing to switch onto; fall through to the normal flow,
+    // which creates the setup (or explains why it can't).
   }
 
   // 1) Ensure the stack exists and is complete (resumable). If the setup already
@@ -236,38 +327,113 @@ export async function runBootstrap(
     };
   }
 
-  // 2) Reconcile the operator access key — MULTI-DEVICE SAFE. The secret is shown
-  //    by AWS exactly once, so this machine always mints a fresh key; but other
-  //    machines' keys must survive, so we delete only (a) the key THIS machine
-  //    already holds (it's being replaced) and (b), if the user is still at IAM's
-  //    2-key limit, the OLDEST remaining key (most likely a lost/retired machine).
-  const keys = await gw.listAccessKeys(operatorUserName);
-  const localKeyId = readLocalKeyId();
-  for (const k of keys) {
-    if (localKeyId && k.accessKeyId === localKeyId) await gw.deleteAccessKey(operatorUserName, k.accessKeyId);
-  }
-  const others = keys
-    .filter((k) => !(localKeyId && k.accessKeyId === localKeyId))
-    .sort((a, b) => (a.createDate?.getTime() ?? 0) - (b.createDate?.getTime() ?? 0));
-  let evictedAccessKeyId: string | undefined;
-  while (others.length >= 2) {
-    const oldest = others.shift()!;
-    await gw.deleteAccessKey(operatorUserName, oldest.accessKeyId);
-    evictedAccessKeyId = oldest.accessKeyId;
-  }
-  const key = await gw.createAccessKey(operatorUserName);
-  // 3) Persist ONLY the non-admin operator key. (Setup creds are never written.)
-  writeProfile({ accessKeyId: key.accessKeyId, secretAccessKey: key.secretAccessKey });
+  const minted = await reconcileOperatorKey(
+    gw,
+    input,
+    operatorUserName,
+    brokerRoleArn,
+    writeProfile,
+    readLocalKeyId,
+    recordKey,
+  );
 
   return {
     accountId: who.accountId,
     brokerRoleArn,
     operatorUserName,
-    operatorAccessKeyId: key.accessKeyId,
+    operatorAccessKeyId: minted.accessKeyId,
     ...(joinedRegion ? { joinedExistingSetupIn: joinedRegion } : {}),
     ...(notUpdated ? { setupNotUpdated: true } : {}),
-    ...(evictedAccessKeyId ? { evictedAccessKeyId } : {}),
+    ...(minted.evictedAccessKeyId ? { evictedAccessKeyId: minted.evictedAccessKeyId } : {}),
   };
+}
+
+/**
+ * Which key id THIS machine holds. The profile is the live source; the broker's
+ * non-secret key record is the fallback for a machine whose profile was removed
+ * ("Forget this key") — without it, a later re-setup can't recognise its own key
+ * and evicts another machine's at the two-key limit.
+ */
+function defaultReadLocalKeyId(): string | null {
+  return readAgentsPoppyProfileKeyId() ?? readOperatorKeyRecord()?.accessKeyId ?? null;
+}
+
+/**
+ * Reconcile the operator access key — MULTI-DEVICE SAFE, and ordered so a failure
+ * never trades a working key for a broken one (docs/specs/operator-key-least-privilege.md):
+ *
+ *   1. Make room only when forced: at IAM's 2-key limit this machine's OWN key is
+ *      deleted first (it is being replaced; unavoidable), and any OTHER key is only
+ *      evicted with explicit consent ({@link EvictionRequiredError} otherwise).
+ *   2. Mint, then VERIFY the fresh key can assume the broker role — in memory,
+ *      before anything touches disk. Verification failure deletes the fresh key
+ *      and leaves the profile exactly as it was.
+ *   3. Write the profile + the non-secret key record.
+ *   4. Only now delete this machine's old key, when it survived step 1.
+ */
+async function reconcileOperatorKey(
+  gw: BootstrapGateway,
+  input: BootstrapInput,
+  operatorUserName: string,
+  brokerRoleArn: string,
+  writeProfile: (key: AwsKeyInput) => void,
+  readLocalKeyId: () => string | null,
+  recordKey: (accessKeyId: string) => void,
+): Promise<{ accessKeyId: string; evictedAccessKeyId?: string }> {
+  const keys = await gw.listAccessKeys(operatorUserName);
+  const localKeyId = readLocalKeyId();
+  const own = keys.find((k) => localKeyId && k.accessKeyId === localKeyId);
+  const others = keys
+    .filter((k) => k !== own)
+    .sort((a, b) => (a.createDate?.getTime() ?? 0) - (b.createDate?.getTime() ?? 0));
+
+  let remaining = keys.length;
+  let ownDeletedEarly = false;
+  let evictedAccessKeyId: string | undefined;
+
+  if (own && remaining >= 2) {
+    // At the limit and our own key is among them: it is being replaced anyway, and
+    // deleting it (not another machine's) is the only way to make room. If the mint
+    // below then fails, this machine is disconnected — the error says to re-run.
+    await gw.deleteAccessKey(operatorUserName, own.accessKeyId);
+    ownDeletedEarly = true;
+    remaining--;
+  }
+  while (remaining >= 2) {
+    const oldest = others.shift()!;
+    if (!input.allowEviction) throw new EvictionRequiredError(oldest.accessKeyId, oldest.createDate);
+    await gw.deleteAccessKey(operatorUserName, oldest.accessKeyId);
+    evictedAccessKeyId = oldest.accessKeyId;
+    remaining--;
+  }
+
+  const key = await gw.createAccessKey(operatorUserName);
+  if (gw.verifyOperatorKey) {
+    try {
+      await gw.verifyOperatorKey(brokerRoleArn, key);
+    } catch (err) {
+      // Never leave a fresh, unverified key lying around — and never overwrite the
+      // profile with it. (When our own key was consumed for room above, the profile
+      // now points at a dead key; the message must say to re-run setup.)
+      await gw.deleteAccessKey(operatorUserName, key.accessKeyId).catch(() => {});
+      throw new Error(
+        `The new operator key was minted but could not assume the broker role, so it was removed ` +
+          `and nothing on this machine was changed${ownDeletedEarly ? " — except that this machine's previous key had to be retired to make room, so re-run setup to finish reconnecting" : ""}. ` +
+          `AWS said: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  // Persist ONLY the non-admin operator key. (Setup creds are never written.)
+  writeProfile({ accessKeyId: key.accessKeyId, secretAccessKey: key.secretAccessKey });
+  recordKey(key.accessKeyId);
+
+  if (own && !ownDeletedEarly) {
+    // Under the limit: the old key stayed alive until the new one was verified and
+    // written. Retire it last — a failure before this line leaves a working machine.
+    await gw.deleteAccessKey(operatorUserName, own.accessKeyId).catch(() => {});
+  }
+  return { accessKeyId: key.accessKeyId, ...(evictedAccessKeyId ? { evictedAccessKeyId } : {}) };
 }
 
 /**
@@ -596,15 +762,42 @@ async function describeBootstrapStack(client: CloudFormationClient): Promise<Des
   }
 }
 
-export function sdkBootstrapGateway(region: string, setup?: AwsKeyInput): BootstrapGateway {
-  const resolveCreds = async () =>
-    setup
-      ? {
-          accessKeyId: setup.accessKeyId.trim(),
-          secretAccessKey: setup.secretAccessKey.trim(),
-          ...(setup.sessionToken?.trim() ? { sessionToken: setup.sessionToken.trim() } : {}),
-        }
-      : operatorCredentials();
+export function sdkBootstrapGateway(
+  region: string,
+  setup?: AwsKeyInput,
+  /**
+   * Credential override for READ-ONLY gateways (the staleness check): template v4 strips
+   * the operator's own `cloudformation:*`, so the version read must arrive through the
+   * broker role (the maintenance session) instead. Never used for deploy/mutation
+   * gateways — a role session may not apply the stack that defines the role.
+   */
+  overrideCredentials?: () => Promise<unknown>,
+): BootstrapGateway {
+  // Pinned ONCE per gateway (= per bootstrap run): a run must use the credentials it
+  // STARTED with for its whole lifetime. Without this, the keys-first switch rewrote the
+  // [agentspoppy] profile mid-run and the per-call re-resolution then signed the template
+  // re-apply with the BRAND-NEW operator key — which by design cannot touch the stack —
+  // so the one-click flow always reported "the template could not be re-applied" (found
+  // live, sandbox click-through 2026-08-30). Resolving to static values (a provider from
+  // fromIni re-reads the file on every invocation) is what actually pins it.
+  let pinned: Promise<{ accessKeyId: string; secretAccessKey: string; sessionToken?: string }> | null = null;
+  const resolveCreds = async () => {
+    if (setup) {
+      return {
+        accessKeyId: setup.accessKeyId.trim(),
+        secretAccessKey: setup.secretAccessKey.trim(),
+        ...(setup.sessionToken?.trim() ? { sessionToken: setup.sessionToken.trim() } : {}),
+      };
+    }
+    if (!pinned) {
+      pinned = (async () => {
+        const p = await (overrideCredentials?.() ?? operatorCredentials());
+        const c = typeof p === "function" ? await (p as () => Promise<unknown>)() : p;
+        return c as { accessKeyId: string; secretAccessKey: string; sessionToken?: string };
+      })();
+    }
+    return pinned;
+  };
 
   async function cfn() {
     const { CloudFormationClient } = await import("@aws-sdk/client-cloudformation");
@@ -732,6 +925,35 @@ export function sdkBootstrapGateway(region: string, setup?: AwsKeyInput): Bootst
       const k = res.AccessKey;
       if (!k?.AccessKeyId || !k?.SecretAccessKey) throw new Error("AWS did not return a new access key.");
       return { accessKeyId: k.AccessKeyId, secretAccessKey: k.SecretAccessKey };
+    },
+
+    async verifyOperatorKey(roleArn, key) {
+      const { STSClient, AssumeRoleCommand } = await import("@aws-sdk/client-sts");
+      const sts = new STSClient({
+        region,
+        credentials: { accessKeyId: key.accessKeyId, secretAccessKey: key.secretAccessKey },
+      });
+      // A seconds-old key fails with InvalidClientTokenId ("security token … is
+      // invalid") until IAM propagates it — a DIFFERENT wording family from the
+      // managed-policy lag sts.ts retries, so it gets its own matcher here.
+      const notYetActive = (err: unknown): boolean =>
+        /InvalidClientTokenId|security token.*(invalid|not.*valid)/i.test((err as Error)?.message ?? "");
+      const maxAttempts = 8;
+      for (let i = 0; ; i++) {
+        try {
+          await sts.send(
+            new AssumeRoleCommand({
+              RoleArn: roleArn,
+              RoleSessionName: "AgentsPoppyHost-key-verify",
+              DurationSeconds: 900,
+            }),
+          );
+          return;
+        } catch (err) {
+          if (i >= maxAttempts - 1 || !notYetActive(err)) throw err;
+          await new Promise((r) => setTimeout(r, 1500 * (i + 1)));
+        }
+      }
     },
 
     async findExistingBrokerResources() {
