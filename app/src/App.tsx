@@ -80,6 +80,12 @@ export function App() {
   // credentials are shared by every AWS client in the broker, so when they lapse or lack a
   // permission, EVERY app's map goes blank — this surfaces that once, up top, with a fix.
   const [awsHealth, setAwsHealth] = useState<AwsHealth>("checking");
+  // Is THIS machine standing on the restricted operator key? null = not yet known / no
+  // account. It decides which of the two setup banners may show: on a setup key the step-0
+  // switch owns the flow (and its one action also re-applies the template), so the staleness
+  // banner must stay quiet — showing both is two primary buttons for one job (field report
+  // 2026-08-30). docs/specs/operator-key-least-privilege.md.
+  const [machineIsOperator, setMachineIsOperator] = useState<boolean | null>(null);
 
   // Installed extensions + their runtime state (container model) — local broker call.
   const refreshExtensions = useCallback(() => {
@@ -138,13 +144,17 @@ export function App() {
     const primary = accts[0];
     if (!primary) {
       setAwsHealth("disconnected");
+      setMachineIsOperator(null);
       return;
     }
-    // Do the credentials even authenticate?
+    // Do the credentials even authenticate? The arn also tells us whether this machine is
+    // on the restricted operator key (which of the two setup banners may show).
     try {
-      await broker.awsIdentity();
+      const id = await broker.awsIdentity();
+      setMachineIsOperator(id.arn.includes(":user/AgentsPoppyOperator"));
     } catch {
       setAwsHealth("unreachable");
+      setMachineIsOperator(null);
       return;
     }
     // They authenticate — but can they actually OPERATE the account? Reading the map and
@@ -456,22 +466,28 @@ export function App() {
         )}
 
         <UpdateBanner />
-        {/* Not on the connect screen itself: that IS the fix, and a banner telling someone
-            to do the thing they are already doing is pure noise. */}
-        {view.type !== "connect" && (
+        {/* The two setup banners are mutually exclusive by which key this machine holds, so a
+            user is never shown two primary buttons for what is really one job (field report
+            2026-08-30). On a SETUP key, step 0 owns the flow — one click switches the key AND
+            re-applies the current template — so the staleness banner stays quiet. On the
+            OPERATOR key, the staleness banner owns re-applying (which needs setup creds). While
+            the key is still unknown (machineIsOperator === null), neither shows.
+            Not on the connect screen: that IS the fix. */}
+        {view.type !== "connect" && machineIsOperator === true && (
           <SetupUpdateBanner
             refreshKey={setupCheckKey}
             onUpdate={() => setView({ type: "connect", action: "redeploy" })}
           />
         )}
-        {/* Step 0 — a machine standing on the powerful setup key instead of the operator
-            key (docs/specs/operator-key-least-privilege.md). Ordered ABOVE nothing: it and
-            the staleness banner can both show; the key switch is the one to do first. */}
-        {view.type !== "connect" && (
+        {view.type !== "connect" && machineIsOperator === false && (
           <OperatorKeyBanner
             accountId={primaryAccount?.id ?? null}
             refreshKey={setupCheckKey}
-            onSwitched={() => setSetupCheckKey((k) => k + 1)}
+            onSwitched={() => {
+              setMachineIsOperator(null); // re-probe identity + staleness after the switch
+              setSetupCheckKey((k) => k + 1);
+              void refreshList(); // re-reads identity (→ machineIsOperator) via refreshAwsHealth
+            }}
             onOpenConnect={() => setView({ type: "connect", action: "redeploy" })}
           />
         )}

@@ -5,6 +5,7 @@
 // "@agentspoppy/core/ledger" so browser consumers (the app) never pull in node:fs.
 export * from "./types";
 export * from "./resources";
+export * from "./birthActions";
 export * from "./permissions";
 export * from "./approvals";
 export * from "./activity";

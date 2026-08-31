@@ -146,9 +146,11 @@ export function OperatorKeyBanner({
           {verified ? (
             <>
               It's connected as <code>{identity.arn}</code> — a credential that can change AgentsPoppy's own
-              protections, which the everyday key deliberately cannot. One click switches this machine to the
-              restricted <code>AgentsPoppyOperator</code> key: AgentsPoppy uses the powerful key once more to
-              create it, verifies it works, then stores only the restricted key.
+              protections, which the everyday key deliberately cannot. <strong>One click does everything</strong>:
+              AgentsPoppy uses the powerful key once more to create the restricted{" "}
+              <code>AgentsPoppyOperator</code> key, verifies it, brings your account's protections up to date, and
+              then stores only the restricted key. If you also see a separate "setup needs updating" note, this
+              handles that too.
             </>
           ) : (
             <>

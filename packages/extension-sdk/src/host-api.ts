@@ -184,6 +184,18 @@ export interface BackendBootstrap {
   /** For an "http" backend: the loopback port the host assigned for it to listen on. */
   port?: number;
   /**
+   * ARN of the account's `AgentsPoppyBoundary` managed policy — present ONLY when the
+   * host has confirmed the deployed setup actually carries it (setup version ≥ 3).
+   *
+   * A poppy whose CloudFormation template creates IAM roles passes this value as its
+   * `PermissionsBoundaryArn` template parameter, so every role it creates is capped by
+   * the boundary (docs/specs/broker-role-v2.md, step 2). When absent, pass nothing and
+   * deploy unbounded: the account's setup predates the boundary, and a `CreateRole`
+   * naming a policy that does not exist is refused by IAM. The host turns this from
+   * optional into REQUIRED in step 3, once the fleet attaches it.
+   */
+  permissionsBoundaryArn?: string;
+  /**
    * A directory the host creates and owns for this poppy's own persistent files.
    *
    * Write your state here — not `~/.<yourname>/`. Under

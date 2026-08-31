@@ -24,6 +24,7 @@ import type { Connection, ConnectionStatus, PermissionGrant } from "@agentspoppy
 import type { BackendBootstrap, Capability, ExtensionManifest } from "@agentspoppy/extension-sdk";
 import type { BrokerService } from "../service";
 import { generateToken } from "../auth";
+import { BOUNDARY_POLICY_NAME } from "../aws/role-template";
 import { agentsPoppyHome } from "../store";
 import { type BackendHost, type BackendProcess, NodeBackendHost } from "./backend-host";
 
@@ -476,7 +477,59 @@ export class ExtensionRegistry {
       port,
       dataDir: await this.dataDirFor(manifest.id),
       account: { accountId: account.accountId, region: account.regions[0] ?? "us-east-1" },
+      ...(await this.boundaryArnFor(account.accountId)),
     };
+  }
+
+  /**
+   * The `permissionsBoundaryArn` bootstrap field — present only when the deployed setup
+   * is CONFIRMED to carry the AgentsPoppyBoundary policy (setup version ≥ 3, the version
+   * that introduced it). A poppy that attaches a boundary the account does not have breaks
+   * its own deploy, so uncertainty (unreadable / pending / pre-boundary setup) means the
+   * field is simply absent and the poppy deploys unbounded, exactly as before step 2
+   * (docs/specs/broker-role-v2.md). Memoised briefly: backends respawn in bursts (app
+   * start), and one CloudFormation read per burst is plenty.
+   */
+  private boundaryMemo: { at: number; accountId: string; value: { permissionsBoundaryArn?: string } } | null = null;
+
+  private async boundaryArnFor(accountId: string): Promise<{ permissionsBoundaryArn?: string }> {
+    const TTL_MS = 5 * 60 * 1000;
+    if (
+      this.boundaryMemo &&
+      this.boundaryMemo.accountId === accountId &&
+      Date.now() - this.boundaryMemo.at < TTL_MS
+    ) {
+      return this.boundaryMemo.value;
+    }
+    let value: { permissionsBoundaryArn?: string } = {};
+    try {
+      // getSetupStatus() describes the FIRST linked account, so it may be describing a
+      // different account than the one this backend is bound to. Claiming a boundary on
+      // that basis would hand a poppy an ARN its account might not have — the exact
+      // failure this field exists to prevent. Only the account the status actually
+      // describes gets the claim; any other deploys unbounded.
+      const described = (await this.service.listAccounts())[0];
+      if (described?.accountId !== accountId) return this.rememberBoundary(accountId, value);
+      const status = await this.service.getSetupStatus();
+      const deployed =
+        (status.state === "current" || status.state === "outdated") && typeof status.deployed === "number"
+          ? status.deployed
+          : null;
+      if (deployed !== null && deployed >= 3) {
+        value = { permissionsBoundaryArn: `arn:aws:iam::${accountId}:policy/${BOUNDARY_POLICY_NAME}` };
+      }
+    } catch {
+      // Unreadable setup → no boundary claim. Never block a backend spawn on this read.
+    }
+    return this.rememberBoundary(accountId, value);
+  }
+
+  private rememberBoundary(
+    accountId: string,
+    value: { permissionsBoundaryArn?: string },
+  ): { permissionsBoundaryArn?: string } {
+    this.boundaryMemo = { at: Date.now(), accountId, value };
+    return value;
   }
 
   /**

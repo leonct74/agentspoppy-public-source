@@ -24,13 +24,18 @@
 // later "tidying up" by folding it back into the additive bucket.
 
 import { describe, it, expect } from "vitest";
-import { grantCanDestroy, grantCanMutate, assessGrant } from "@agentspoppy/core";
+import { grantCanDestroy, grantCanMutate, assessGrant, compilerTreatsAsBirth } from "@agentspoppy/core";
 import { qualifyActions } from "./policy";
 
-/** The compiler's own create filter, applied exactly as statementForGrant applies it. */
+/**
+ * The compiler's own birth classifier — IMPORTED, not re-implemented. This function used to
+ * keep a private copy of the compiler's verb regex, so when the compiler learned that
+ * `ec2:RunInstances` is a birth, the guard went on asserting the opposite and went on passing:
+ * a drift detector that had itself drifted.
+ */
 function compilerTreatsAsCreate(service: string, action: string): boolean {
   const [qualified] = qualifyActions({ service, actions: [action], resourceScope: "*" });
-  return /:(Create|Request)/.test(qualified!);
+  return compilerTreatsAsBirth(qualified!);
 }
 
 /**
@@ -94,10 +99,12 @@ describe("I6 — the rating's additive bucket never outruns the compiler's birth
     });
   }
 
-  // The specific case the launch class exists for: plain English calls it a create, the
-  // compiler does not, and so the rating must not use the additive reassurance.
-  it("ec2:RunInstances is a create in English, not to the compiler, and not to the rating", () => {
-    expect(compilerTreatsAsCreate("ec2", "RunInstances")).toBe(false);
+  // The compiler now DOES birth-tag RunInstances (that fix is why launches work at all), while
+  // the rating still withholds the additive reassurance. The rating being STRICTER than the
+  // policy is the safe direction — I6 forbids the rating promising more than the policy gives,
+  // not less.
+  it("ec2:RunInstances is a birth to the compiler, and still not additive to the rating", () => {
+    expect(compilerTreatsAsCreate("ec2", "RunInstances")).toBe(true);
     expect(ratingTreatsAsAdditive("ec2", "RunInstances")).toBe(false);
     expect(grantCanMutate({ service: "ec2", actions: ["RunInstances"], resourceScope: "*" })).toBe(true);
   });

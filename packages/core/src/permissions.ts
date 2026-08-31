@@ -13,6 +13,7 @@
  * consent.
  */
 import { TAGGED_AS_SELF } from "./types";
+import { grantHasReferencedLeg } from "./birthActions";
 import type { ConnectedAccount, Connection, PermissionGrant, PermissionSet } from "./types";
 
 /** The tag keys AgentsPoppy stamps on every brokered resource (for attribution). */
@@ -426,10 +427,22 @@ export function assessGrant(grant: PermissionGrant): GrantRisk {
   }
 
   // Confined to the app's OWN resources — by tag (it created them) or by a name
-  // pattern that genuinely narrows. It can never touch a resource with a different
-  // name/tag, so the blast radius is its own footprint.
+  // pattern that genuinely narrows. It can never CREATE, change or delete a resource with a
+  // different name/tag, so the blast radius is its own footprint.
   const where = tag ? "tagged as its own" : `named ${grant.resourceScope}`;
   const otherwise = tag ? "a different tag" : "a different name";
+
+  // …with one honest exception. A tag-scoped grant containing a multi-resource birth compiles
+  // to an extra statement with NO tag condition, because the birth must be able to name the
+  // things it merely references — a foreign AMI, the VPC a security group is created in — or
+  // AWS denies the whole call. Nothing untagged can be CREATED through that leg (the born
+  // legs stay conditioned), but the grant can reference resources it does not own, and the
+  // consent line must not say otherwise. I6: the rating may be stricter than the compiled
+  // policy, never looser. See birthActions.ts, which both this and the compiler read.
+  const referencesForeign = tag && grantHasReferencedLeg(grant);
+  const exceptReferenced = referencesForeign
+    ? ` It can also use existing ${svc} resources it did not create — such as a network or image — when creating its own, but cannot change or delete them.`
+    : "";
 
   // …except on the control plane, where even a confined grant is privilege
   // management: an IAM role the app may create is a new identity in the account,
@@ -447,7 +460,7 @@ export function assessGrant(grant: PermissionGrant): GrantRisk {
     ? {
         level: "medium",
         scoped: true,
-        reason: `Can create, change and delete only ${svc} resources ${where} — it cannot touch any ${svc} resource with ${otherwise}.${alsoSecrets}`,
+        reason: `Can create, change and delete only ${svc} resources ${where} — it cannot change or delete any ${svc} resource with ${otherwise}.${exceptReferenced}${alsoSecrets}`,
       }
     : secrets
       ? {

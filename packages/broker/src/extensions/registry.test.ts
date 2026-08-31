@@ -179,6 +179,10 @@ describe("ExtensionRegistry lifecycle (start/stop)", () => {
     expect(boot.port).toBe(41234);
     expect(boot.credentialsUrl).toBe(`http://127.0.0.1:8799/connections/${first.connectionId}/credentials`);
     expect(boot.account).toEqual({ accountId: "123456789012", region: "eu-west-1" });
+    // The stub setup reports the CURRENT template version (≥3, boundary present), so the
+    // bootstrap carries the boundary ARN for the poppy's CFN PermissionsBoundaryArn
+    // parameter (docs/specs/broker-role-v2.md, step 2).
+    expect(boot.permissionsBoundaryArn).toBe("arn:aws:iam::123456789012:policy/AgentsPoppyBoundary");
 
     // Starting again doesn't double-spawn.
     await reg.start("com.mailpoppy.desktop", accountId);
@@ -201,6 +205,75 @@ describe("ExtensionRegistry lifecycle (start/stop)", () => {
     // Stopping (disable/revoke) invalidates the token immediately.
     await reg.stop("com.mailpoppy.desktop");
     expect(reg.resolveBackendToken(token)).toBeNull();
+  });
+
+  it("omits the boundary ARN when the deployed setup predates it — the poppy must deploy unbounded", async () => {
+    // A CreateRole naming a PermissionsBoundary policy the account doesn't have is refused
+    // by IAM, so uncertainty or a pre-boundary setup (< v3) means NO claim, not a guess
+    // (docs/specs/broker-role-v2.md step 2 — the fragility the CfnParameter design removes).
+    const s = service();
+    // Pre-boundary account: the setup reads as version 2.
+    (s as unknown as { aws: { readSetupVersion: () => Promise<unknown> } }).aws.readSetupVersion = async () => ({
+      state: "outdated",
+      deployed: 2,
+      expected: 4,
+    });
+    const account = await s.linkAccount({ accountId: "123456789012", regions: ["eu-west-1"] });
+    const host = new StubBackendHost();
+    const reg = new ExtensionRegistry(s, {
+      backendHost: host,
+      brokerBaseUrl: "http://127.0.0.1:8799",
+      allocatePort: async () => 41234,
+    });
+    const m = manifest({ backend: { entry: "bin/backend", transport: "http" } });
+    reg.install({ manifest: m, root: "/opt/ext/mailpoppy" });
+    const first = await reg.start("com.mailpoppy.desktop", account.id);
+    await s.approve(first.connectionId!);
+    await reg.start("com.mailpoppy.desktop", account.id);
+    expect(host.started[0]!.bootstrap.permissionsBoundaryArn).toBeUndefined();
+  });
+
+  it("omits the boundary ARN when the setup status is unreadable — never a guess", async () => {
+    const s = service();
+    (s as unknown as { aws: { readSetupVersion: () => Promise<unknown> } }).aws.readSetupVersion = async () => {
+      throw new Error("throttled");
+    };
+    const account = await s.linkAccount({ accountId: "123456789012", regions: ["eu-west-1"] });
+    const host = new StubBackendHost();
+    const reg = new ExtensionRegistry(s, {
+      backendHost: host,
+      brokerBaseUrl: "http://127.0.0.1:8799",
+      allocatePort: async () => 41234,
+    });
+    const m = manifest({ backend: { entry: "bin/backend", transport: "http" } });
+    reg.install({ manifest: m, root: "/opt/ext/mailpoppy" });
+    const first = await reg.start("com.mailpoppy.desktop", account.id);
+    await s.approve(first.connectionId!);
+    await reg.start("com.mailpoppy.desktop", account.id);
+    expect(host.started[0]!.bootstrap.permissionsBoundaryArn).toBeUndefined();
+  });
+
+  it("omits the boundary ARN for a SECOND account — the setup status only describes the first", async () => {
+    // getSetupStatus() reads listAccounts()[0]. Claiming a boundary for any other account
+    // on that basis would hand a poppy an ARN its own account may not have, and IAM refuses
+    // CreateRole against a boundary that doesn't exist — breaking the deploy this field is
+    // supposed to protect.
+    const s = service();
+    await s.linkAccount({ accountId: "123456789012", regions: ["eu-west-1"] });
+    const second = await s.linkAccount({ accountId: "111122223333", regions: ["eu-west-1"] });
+    const host = new StubBackendHost();
+    const reg = new ExtensionRegistry(s, {
+      backendHost: host,
+      brokerBaseUrl: "http://127.0.0.1:8799",
+      allocatePort: async () => 41234,
+    });
+    const m = manifest({ backend: { entry: "bin/backend", transport: "http" } });
+    reg.install({ manifest: m, root: "/opt/ext/mailpoppy" });
+    const first = await reg.start("com.mailpoppy.desktop", second.id);
+    await s.approve(first.connectionId!);
+    await reg.start("com.mailpoppy.desktop", second.id);
+    expect(host.started[0]!.bootstrap.account.accountId).toBe("111122223333");
+    expect(host.started[0]!.bootstrap.permissionsBoundaryArn).toBeUndefined();
   });
 
   it("pause() stops the backend + invalidates its token and list() shows 'paused'; resume() respawns", async () => {

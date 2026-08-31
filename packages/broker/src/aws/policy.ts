@@ -29,7 +29,15 @@
  * controls what app id a session is tagged with (the connection's verified
  * `app.id`), so an app can only ever match resources tagged as its own.
  */
-import { connectionTags, scopeIsUnbounded, TAGGED_AS_SELF } from "@agentspoppy/core";
+import {
+  bareKey,
+  connectionTags,
+  isSimpleBirth,
+  scopeIsUnbounded,
+  sidPart,
+  SPREAD_BIRTHS,
+  TAGGED_AS_SELF,
+} from "@agentspoppy/core";
 import type { ConnectedAccount, Connection, PermissionGrant } from "@agentspoppy/core";
 
 /** Audit tag recording which connection created a resource (NOT used for ownership). */
@@ -209,15 +217,37 @@ export function statementForGrant(grant: PermissionGrant, appId: string, index: 
     // Scoping to the app (not the connection id) keeps the grant valid across
     // connection supersedes, so teardown can still reach resources an earlier
     // connection made.
-    const isCreate = (a: string) => /:(Create|Request)/.test(a);
-    const creates = Action.filter(isCreate);
-    const rest = Action.filter((a) => !isCreate(a));
     const statements: PolicyStatement[] = [];
-    if (creates.length > 0) {
+    const spread = Action.filter((a) => SPREAD_BIRTHS[bareKey(a)]);
+    const simpleBirths = Action.filter((a) => !SPREAD_BIRTHS[bareKey(a)] && isSimpleBirth(a));
+    const rest = Action.filter((a) => !SPREAD_BIRTHS[bareKey(a)] && !isSimpleBirth(a));
+
+    // A birth that touches SEVERAL resources gets one statement per role those resources
+    // play, because a single blanket condition denies the whole call — see SPREAD_BIRTHS.
+    for (const action of spread) {
+      const shape = SPREAD_BIRTHS[bareKey(action)];
+      /* c8 ignore next */
+      if (!shape) continue; // unreachable: `spread` is filtered on this same lookup
+      statements.push({
+        Sid: `Grant${index}${sidPart(action)}BornTagged`,
+        Effect: "Allow",
+        Action: [action],
+        Resource: [...shape.bornTagged],
+        Condition: { StringEquals: { [`aws:RequestTag/${APP_TAG_KEY}`]: appId } },
+      });
+      statements.push({
+        Sid: `Grant${index}${sidPart(action)}Referenced`,
+        Effect: "Allow",
+        Action: [action],
+        Resource: [...shape.referenced],
+      });
+    }
+
+    if (simpleBirths.length > 0) {
       statements.push({
         Sid: `Grant${index}CreateBirthTagged`,
         Effect: "Allow",
-        Action: creates,
+        Action: simpleBirths,
         Resource: "*",
         Condition: { StringEquals: { [`aws:RequestTag/${APP_TAG_KEY}`]: appId } },
       });
