@@ -109,7 +109,10 @@ export function enforcementCard(
         "." +
         (machine !== undefined ? ` ${declaredMachineTitle(machine)}.` : "") +
         (armed ? " The host refuses connections from this machine that it did not declare." : "") +
-        (infra ? ` ${infra} — that is its purpose.` : ""),
+        // The title itself now carries the ownership ("which it creates for you") — the
+        // founder's point: a bare "servers"/"websites" reads as the DEVELOPER'S. The
+        // purpose framing lives once, in the advanced row's context.
+        (infra ? ` ${infra}.` : ""),
     });
   } else if (canDeployCloudCompute(ps)) {
     // Transition truth (2026-09-01, the founder's correction): the catalogue refuses

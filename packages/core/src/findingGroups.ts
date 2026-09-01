@@ -252,9 +252,11 @@ export function buildFindings(ps: PermissionSet): Finding[] {
       services: [],
       context:
         "Where its cloud code connects is the developer's statement rather than something AWS enforces. AWS does not restrict where code deployed in your account sends data.",
+      // "none" is the manifest's keyword, not a sentence — glossed wherever a person
+      // reads it (founder: '"nothing to declare" is clearer than "none"').
       scopeLine: Array.isArray(egress)
         ? `manifest declares egress to ${egress.length} named domain${egress.length === 1 ? "" : "s"}: ${egress.join(", ")}`
-        : `manifest declares egress: ${egress}`,
+        : `manifest declares egress: ${egress === "none" ? '"none" — nothing to declare' : egress}`,
       actions: bucketActions("", []),
       gated: false,
     });
@@ -271,7 +273,7 @@ export function buildFindings(ps: PermissionSet): Finding[] {
         context: MACHINE_EGRESS_CONTEXT,
         scopeLine: Array.isArray(machine)
           ? `manifest declares machine egress to ${machine.length} named domain${machine.length === 1 ? "" : "s"}: ${machine.join(", ")}`
-          : `manifest declares machine egress: ${machine}`,
+          : `manifest declares machine egress: ${machine === "none" ? '"none" — nothing to declare' : machine}`,
         actions: bucketActions("", []),
         gated: false,
       });

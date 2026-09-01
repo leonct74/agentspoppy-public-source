@@ -90,9 +90,9 @@ describe("infrastructure egress (door 2 — what the poppy creates for the user)
   });
 
   it("titles state purpose in platform words; none/absent yields no row", () => {
-    expect(infrastructureTitle("servers")).toBe("The servers it creates for you can reach the internet");
-    expect(infrastructureTitle("websites")).toBe("The websites it creates serve the public internet");
-    expect(infrastructureTitle("email")).toBe("The mail system it builds exchanges email with the outside world");
+    expect(infrastructureTitle("servers")).toBe("Your servers, which it creates for you, can reach the internet");
+    expect(infrastructureTitle("websites")).toBe("Your websites, which it creates for you, serve the public internet");
+    expect(infrastructureTitle("email")).toBe("Your mail system, which it builds for you, exchanges email with the outside world");
     expect(infrastructureTitle("none")).toBeNull();
     expect(infrastructureTitle(undefined)).toBeNull();
   });

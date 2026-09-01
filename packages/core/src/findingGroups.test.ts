@@ -154,7 +154,7 @@ describe("buildFindings — infrastructure egress (door 2)", () => {
     const f = buildFindings({ ...ps([compute]), network: { egress: "none" as const, infrastructure: "servers" as const } });
     const infra = f.find((x) => x.id === "egress-infrastructure");
     expect(infra).toBeDefined();
-    expect(infra!.title).toBe("The servers it creates for you can reach the internet");
+    expect(infra!.title).toBe("Your servers, which it creates for you, can reach the internet");
     expect(infra!.context).toContain("Catalogue rules forbid");
     expect(f.find((x) => x.id === "egress-declared")).toBeDefined();
   });

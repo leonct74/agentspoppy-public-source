@@ -113,13 +113,16 @@ export const EGRESS_TITLE_DOMAINS = 3;
  * be gamed by a manifest. Null when the poppy declares no internet-facing infrastructure.
  */
 export function infrastructureTitle(kind: InfrastructureEgress | undefined): string | null {
+  // Every title says WHOSE the infrastructure is — "your", "for you" (founder,
+  // 2026-09-01): a generic "servers"/"websites" reads as the poppy reaching the
+  // DEVELOPER'S servers, the exact confusion this row exists to prevent.
   switch (kind) {
     case "servers":
-      return "The servers it creates for you can reach the internet";
+      return "Your servers, which it creates for you, can reach the internet";
     case "websites":
-      return "The websites it creates serve the public internet";
+      return "Your websites, which it creates for you, serve the public internet";
     case "email":
-      return "The mail system it builds exchanges email with the outside world";
+      return "Your mail system, which it builds for you, exchanges email with the outside world";
     default:
       return null;
   }
