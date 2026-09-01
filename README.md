@@ -59,6 +59,25 @@ what's worth protecting here isn't the code, it's the rules that make it trustwo
 Your AWS credentials live on **your** machine and never leave it. There is **no server** that
 holds keys. (agentspoppy.com is a marketing site only — no credential ever touches it.)
 
+## Declared-only egress — the network sandbox
+
+Every poppy must **declare where it connects** in its manifest (`permissionSet.network`) — a
+poppy without the declaration is not listable in the catalogue. And on your machine the host
+**enforces** it: before a poppy's backend code loads, AgentsPoppy arms a network gate inside the
+process, and every socket connect and DNS lookup is checked against the declaration —
+**undeclared destinations are refused**, not just logged. The poppy's web view is held to the
+same list by a Content-Security-Policy the browser engine itself enforces.
+
+Why this matters beyond honest poppies: it also contains the **supply chain**. A poppy's author
+ships an esbuild bundle of their dependencies, and a poisoned npm package inside it would
+normally be free to exfiltrate whatever the poppy can read. Behind the gate it cannot quietly
+phone home — its connection is refused (and shown to you as something the poppy *tried*).
+Poppies packaged before the declaration existed are observed instead of blocked: every external
+destination they contact is logged once onto their record. The permission screen says
+"Host-enforced" only when the running host reports the gate armed for that poppy — never on the
+manifest's say-so. Details: [`docs/specs/machine-gate.md`](docs/specs/machine-gate.md) and
+[`docs/CONFINEMENT.md`](docs/CONFINEMENT.md).
+
 ## The model
 
 ```

@@ -1414,12 +1414,27 @@ button.os-card--add:hover .os-add-label { color: var(--clay); }
 .ec--partial .ec-chip, .ec--off .ec-chip, .ec--undeclared .ec-chip { border-color: color-mix(in srgb, var(--warn) 45%, var(--border-strong)); color: var(--warn); }
 .ec-sentence { margin: 5px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--muted-2); }
 
-/* ── The advanced view — everything technical, collapsed by default ── */
-details.advanced-view { margin-top: 6px; border-top: 1px solid var(--border); }
-details.advanced-view > summary { list-style: none; cursor: pointer; padding: 13px 2px; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+/* ── The advanced view — everything technical, collapsed by default ──
+   The summary reads as a real BUTTON, not a text line (founder, 2026-09-01: users were
+   missing it entirely): full-width, bordered, elevated surface, hover lift, chevron. */
+details.advanced-view { margin-top: 16px; }
+details.advanced-view > summary {
+  list-style: none; cursor: pointer;
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  padding: 13px 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+details.advanced-view > summary:hover { background: var(--surface-3); border-color: var(--primary); }
+details.advanced-view[open] > summary { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+details.advanced-view[open] { border: 1px solid var(--border-strong); border-radius: 10px; }
+details.advanced-view[open] > *:not(summary) { margin-left: 16px; margin-right: 16px; }
+details.advanced-view[open] > summary { border: 0; border-bottom: 1px solid var(--border); }
 details.advanced-view > summary::-webkit-details-marker { display: none; }
-details.advanced-view > summary:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; border-radius: 4px; }
+details.advanced-view > summary:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; border-radius: 10px; }
 details.advanced-view > summary .adv-title { font-weight: 600; font-size: 14px; }
-details.advanced-view > summary .adv-title::before { content: "▸ "; color: var(--muted); }
+details.advanced-view > summary .adv-title::before { content: "▸ "; color: var(--primary); }
 details.advanced-view[open] > summary .adv-title::before { content: "▾ "; }
 details.advanced-view > summary .adv-sub { font-size: 12px; }
