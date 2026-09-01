@@ -262,10 +262,14 @@ platform patches touching its enforcement points are checked against that docume
   screen shows as *what this poppy is for*, next to the permissions it explains. Say what you build
   and where you put it. HostingPoppy's is the reference; AffiliatePoppy's is close behind.
 
-- **Declare where your cloud code connects** (`permissionSet.network.egress`, spec:
-  `docs/specs/network-egress.md`). IAM confines which resources your code may *touch*; it says
+- **Declare where your cloud code connects — REQUIRED on every poppy, no exceptions**
+  (`permissionSet.network.egress`, spec: `docs/specs/network-egress.md`). The founder's rule
+  (2026-09-01), verbatim: *"no poppies without egress declaration are allowed from now on."*
+  A manifest without `network` is refused at review — new listing and update alike — however
+  little the poppy does; a poppy that deploys no cloud code declares `"egress": "none"`, which
+  is one honest line. Why: IAM confines which resources your code may *touch*; it says
   nothing about where deployed code *sends data* — a Lambda outside a VPC can reach the whole
-  internet. So say it, in the manifest. **This field is about the code you DEPLOY** — your
+  internet. **This field is about the code you DEPLOY** — your
   Lambdas, your instances. What your poppy's own frontend and backend connect to on the user's
   machine is a separate declaration, door 3 below.
 
@@ -282,9 +286,9 @@ platform patches touching its enforcement points are checked against that docume
                                              // way out of naming your endpoints
   ```
 
-  If your poppy deploys no cloud compute, omit the field — the screen shows nothing either way.
-  If it does and you omit it, the screen states the fact for you: *"Its cloud code can reach the
-  internet… this poppy does not say where its cloud code connects."* A declaration is shown as
+  If your poppy deploys no cloud compute, declare `"none"` — the requirement holds for every
+  poppy, and the screen then says so in your favour ("no cloud code" reads better than any
+  warning). A declaration is shown as
   YOUR statement ("Declares its cloud code…"), because that is what it is — enforcement (a sealed
   VPC for `"none"`) is a later phase, and the screen never shows a tick for a promise. Declare
   what is true, not what sounds good: a declaration your code contradicts is the kind of thing an
@@ -983,7 +987,8 @@ answer the user has forgotten a minute later. Put the number where the decision 
       matching `TagResource` actions.
 - [ ] `capabilities` lists **only** what your frontend actually calls.
 - [ ] **Network declared** ([§3](#3-the-security-rules-non-negotiable)): `network.egress` says
-      where the code you deploy connects (required to list if your grants can deploy compute), and
+      where the code you deploy connects — **required on EVERY poppy** (`"none"` if you deploy
+      no cloud code; an undeclared manifest is refused at review) — and
       `network.machine` says where your own frontend and backend connect on the user's machine.
       Door 3 is **enforced** — run the poppy with it declared and confirm nothing you need is
       refused, because an undeclared host fails on the user's machine, not in your dev loop.

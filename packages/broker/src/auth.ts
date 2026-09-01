@@ -82,9 +82,13 @@ export interface AuthConfig {
  */
 export function isSeaBuild(): boolean {
   try {
-    // Sync on purpose (resolveCaller sits on the request path); createRequire is
-    // the ESM-safe way to reach the builtin synchronously.
-    const req = createRequire(import.meta.url);
+    // Sync on purpose (resolveCaller sits on the request path). In the packaged SEA
+    // the bundle is CJS: the ambient `require` is real and `import.meta.url` is
+    // UNDEFINED — createRequire(import.meta.url) THROWS there, and this catch then
+    // returned false IN THE ARTIFACT THIS FUNCTION EXISTS TO DETECT, silently
+    // re-arming the dev escape hatch the packaged build promises is inert
+    // (shipped that way in 0.3.14; caught the same day). Ambient require first.
+    const req = typeof require === "function" ? require : createRequire(import.meta.url);
     return (req("node:sea") as { isSea?: () => boolean }).isSea?.() ?? false;
   } catch {
     return false;

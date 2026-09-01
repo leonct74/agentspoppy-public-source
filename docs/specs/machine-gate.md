@@ -137,6 +137,27 @@ connections", and "physically cannot" remains reserved for the sealed cloud VPC.
 5. The dev rig proves it live (a seeded poppy attempting an undeclared fetch → refused,
    logged, visible), then the release rides the normal runbook.
 
+## The 0.3.14 incident — the artifact broke where no dev run could (2026-09-01)
+
+v0.3.14 shipped a gate that could never arm: the packaged broker is an esbuild **CJS**
+SEA bundle, where `import.meta.url` is UNDEFINED, so `realGateTargets()`'s
+`createRequire(import.meta.url)` threw — and decision 2 (fail closed) then refused to
+start **every confined poppy backend**, in observe mode included. The founder hit it
+within the hour ("backend exited before listening"). Every dev-path test had passed,
+because tsx runs the sources as real ESM where `import.meta.url` exists; only the
+artifact could reproduce it. The same expression sat in `auth.ts::isSeaBuild()`, where
+the swallow-and-return-false made the packaged build classify itself as a dev build —
+re-arming the dev escape hatch the packaged build promises is inert (verified live:
+`AGENTSPOPPY_DEV_OPEN=1` against the shipped 0.3.14 broker answered the management
+plane with 200 and no token; the fixed binary answers 401).
+
+Fixed in 0.3.15 (ambient `require` first, `createRequire` only for real ESM), and
+`verify-bundle.mjs` now spawns a poppy child through the actual `--poppy-backend` path
+of the built binary, in both observe and enforce modes, before any release can pass.
+The standing lesson is the release runbook's: **a gate that must hold inside the
+artifact must be proven on the artifact** — the class of check no source-level test
+replaces. 0.3.14 was pulled the same day (the v0.2.6 precedent).
+
 ## Proven, on the real child path (2026-09-01)
 
 Re-run after the door-3 correction, through `serve.ts --poppy-backend` (the path the

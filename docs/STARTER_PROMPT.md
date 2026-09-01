@@ -60,11 +60,13 @@ Non-negotiable rules (from AGENTS.md):
     • never spawn a child process or a worker — pure Node in one process;
     • trap: under the permission model `fs.existsSync` on a DENIED path THROWS instead of
       returning false — wrap existence probes in try/catch (treat a throw as "not there").
-- DECLARE WHERE YOUR CODE CONNECTS, in `permissionSet.network`. Two fields, two different
-  places code runs:
+- DECLARE WHERE YOUR CODE CONNECTS, in `permissionSet.network`. This is REQUIRED on every
+  poppy — a manifest without it is refused at review, new listing and update alike. Two
+  fields, two different places code runs:
     • `"egress"` — where the code you DEPLOY connects (`"none"` / `"aws-only"` / named hosts).
-      Required to be listed if your grants can deploy cloud compute; shown to the user as your
-      own statement. Add `"infrastructure": "servers" | "websites" | "email"` if what you build
+      REQUIRED always: if you deploy no cloud code at all, declare `"none"` — that is the
+      honest value and it reads in your favour on the permission screen. Add
+      `"infrastructure": "servers" | "websites" | "email"` if what you build
       FOR the user is itself internet-facing.
     • `"machine"` — where YOUR OWN frontend and backend connect on the user's machine, same
       values. This one the host ENFORCES: it checks every connection your backend opens (before

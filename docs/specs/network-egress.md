@@ -18,6 +18,16 @@ say "Declares…" and never carry a tick. The risk-assessor weighting is deliber
 in phase 1's first cut — it touches guarded `permissions.ts` and waits for the founder's
 mechanism window.
 
+**Phase 1c (founder, 2026-09-01 evening, verbatim: "I would never approve an app with
+egress that they do not declare … no poppies without egress declaration are allowed from
+now on"):** the requirement is UNIVERSAL — every poppy, not only those whose grants can
+deploy cloud compute. A poppy that deploys no cloud code declares `"none"`. The
+mechanical review refuses any manifest without `permissionSet.network`, on new listings
+and updates alike. The sequencing lesson recorded with it: the 0.3.14/0.3.15 host showed
+the "Data exits" row while every installed poppy was still packaged pre-rule, so seven
+first-party poppies read "Undeclared" like a warning — the screen's transition wording
+now states the manifest's age, and the fleet's declared releases ship with this change.
+
 **Phase 1b, same day (founder: undeclared egress must be FORBIDDEN, not noted):** the
 catalogue now refuses it. `agentspoppy-web/scripts/lib/mechanical-review.mjs::checkPackageBytes`
 — the same gate that refuses unconfined backends — refuses any package whose grants can

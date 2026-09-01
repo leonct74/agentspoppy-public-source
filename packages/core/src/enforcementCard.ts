@@ -112,12 +112,18 @@ export function enforcementCard(
         (infra ? ` ${infra} — that is its purpose.` : ""),
     });
   } else if (canDeployCloudCompute(ps)) {
+    // Transition truth (2026-09-01, the founder's correction): the catalogue refuses
+    // new listings and updates without a declaration, so an undeclared poppy a user
+    // HAS is, by definition, one packaged before the rule existed — the age of its
+    // manifest, not evasion. The card must say that, or seven first-party poppies
+    // read as warnings on the day the rule ships.
     rows.push({
       id: "egress",
       label: "Data exits",
       state: "undeclared",
-      stateWord: "Undeclared",
-      sentence: "Does not say where its cloud code connects. A poppy can no longer enter or update in the catalogue without declaring this.",
+      stateWord: "Not yet declared",
+      sentence:
+        "Doesn't yet say where its cloud code connects — this version was packaged before declaring became required (September 2026). The catalogue requires the declaration at its next update.",
     });
   } else {
     rows.push({

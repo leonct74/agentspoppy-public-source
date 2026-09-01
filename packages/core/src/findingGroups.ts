@@ -298,8 +298,8 @@ export function buildFindings(ps: PermissionSet): Finding[] {
       title: "Its cloud code can reach the internet",
       services: [],
       context:
-        "AWS does not restrict where code deployed in your account sends data, and this poppy does not say where its cloud code connects. " +
-        "A poppy can no longer enter or update in the AgentsPoppy catalogue without declaring this.",
+        "AWS does not restrict where code deployed in your account sends data, and this version of the poppy was packaged before AgentsPoppy required poppies to declare where their cloud code connects (September 2026). " +
+        "The catalogue requires the declaration at this poppy's next update.",
       scopeLine: "manifest declares no network egress",
       actions: bucketActions("", []),
       gated: false,

@@ -118,10 +118,11 @@ describe("buildFindings — network egress (spec: network-egress.md phase 1)", (
     expect(row).toBeDefined();
     expect(row!.triage).toBe("know");
     expect(row!.title).toBe("Its cloud code can reach the internet");
-    expect(row!.context).toContain("does not say where its cloud code connects");
-    // The listing rule is real (agentspoppy-web mechanical-review refuses undeclared
-    // egress), so the screen may state it — and must, or the fact reads as unpoliced.
-    expect(row!.context).toContain("can no longer enter or update in the AgentsPoppy catalogue");
+    // Transition wording: an installed undeclared poppy predates the rule by
+    // definition (the catalogue refuses new/updated listings without a declaration),
+    // so the row must read as the manifest's age, never as an accusation.
+    expect(row!.context).toContain("packaged before AgentsPoppy required");
+    expect(row!.context).toContain("at this poppy's next update");
   });
 
   it("says nothing at all for a poppy with no cloud compute — no fact, no copy", () => {

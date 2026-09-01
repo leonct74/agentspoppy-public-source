@@ -15,7 +15,7 @@
 //
 // Usage: node scripts/verify-bundle.mjs [path/to/AgentsPoppy.app]
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -75,4 +75,35 @@ if (status === null) fail("broker never answered HTTP on its port");
 
 console.log(`✅ broker started and answers HTTP (status ${status}) — bundle is behaviorally sound`);
 child.kill("SIGTERM");
+
+// 3. The SAME binary must be able to run a poppy backend child with the machine gate
+// armed. This is a distinct code path from serving HTTP: the gate arms via the builtin
+// `require`, and v0.3.14 shipped a bundle where createRequire(import.meta.url) threw in
+// the CJS SEA (import.meta.url is undefined there) — so the fail-closed gate refused to
+// start EVERY confined poppy backend, while the broker itself passed the check above and
+// every signing gate. Dev runs (tsx, real ESM) can never reproduce it; only the artifact
+// can, which is why it is checked here.
+import { writeFileSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+const dir = mkdtempSync(`${tmpdir()}/ap-verify-gate-`);
+const stub = `${dir}/poppy.cjs`;
+writeFileSync(stub, 'require("node:dns");console.log("GATE_CHILD_RAN");');
+for (const cfg of ['{"mode":"observe"}', '{"mode":"enforce","egress":"aws-only"}']) {
+  const r = spawnSyncChild(broker, ["--poppy-backend", stub], cfg);
+  if (!r.includes("GATE_CHILD_RAN")) {
+    console.error(`--- child output (${cfg}) ---
+${r.trim()}`);
+    fail(`poppy child did not run under the machine gate (${cfg}) — the v0.3.14 class of break`);
+  }
+}
+console.log("✅ poppy child runs under the machine gate (observe + enforce) — gate arms in this artifact");
 process.exit(0);
+
+function spawnSyncChild(bin, args, gateCfg) {
+  const r = spawnSync(bin, args, {
+    encoding: "utf8",
+    timeout: 15000,
+    env: { ...process.env, AGENTSPOPPY_NET_GATE: gateCfg },
+  });
+  return (r.stdout ?? "") + (r.stderr ?? "");
+}

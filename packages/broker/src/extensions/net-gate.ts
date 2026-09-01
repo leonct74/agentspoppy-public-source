@@ -241,14 +241,27 @@ export function armNetGate(rawConfig: string, t: GateTargets): void {
 }
 
 /**
- * The real targets. Via createRequire, NOT `import()`: an ES-module namespace object is
+ * The builtin `require` for THIS build artifact. Two shapes exist and each breaks the
+ * other's path: the packaged SEA broker is an esbuild CJS bundle, where the ambient
+ * `require` is real but `import.meta.url` is UNDEFINED — so createRequire(import.meta.url)
+ * THROWS, which is exactly how 0.3.14 shipped a gate that could never arm and (fail-closed)
+ * refused to start every confined backend. Dev runs (tsx, real ESM) are the mirror image:
+ * no ambient `require`, a real `import.meta.url`. Try the ambient one first.
+ */
+function builtinRequire(): NodeRequire {
+  if (typeof require === "function") return require;
+  return createRequire(import.meta.url);
+}
+
+/**
+ * The real targets. Via require, NOT `import()`: an ES-module namespace object is
  * FROZEN, so patching `dns.lookup` on one throws "Cannot redefine property" — the gate
  * would crash (closed, but broken) on every backend. `require()` returns the builtin's
  * actual mutable module object, which is also the one a CJS poppy bundle sees. Caught by
  * the real-module test below the fakes.
  */
 export function realGateTargets(): GateTargets {
-  const req = createRequire(import.meta.url);
+  const req = builtinRequire();
   const net = req("node:net") as typeof import("node:net");
   return {
     socketProto: net.Socket.prototype as unknown as GateTargets["socketProto"],
