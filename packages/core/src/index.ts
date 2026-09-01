@@ -10,6 +10,7 @@ export * from "./awsNarrowing";
 export * from "./permissions";
 export * from "./guarantees";
 export * from "./serviceStakes";
+export * from "./findingGroups";
 export * from "./observed";
 export * from "./approvals";
 export * from "./activity";

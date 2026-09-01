@@ -17,7 +17,7 @@ import { Icon } from "./Icon";
 const ROTATION_NUDGE_DAYS = 90;
 
 /** Module-level on purpose — a default-parameter closure re-triggers the effect every render. */
-const defaultLoadInfo = (): Promise<{ profileKeyId: string | null; mintedAt: string | null }> =>
+const defaultLoadInfo = (): Promise<{ profileKeyId: string | null; mintedAt: string | null; secretCustody?: "keychain" | "file" | "none" }> =>
   broker.operatorKeyInfo();
 const defaultRevoke = (): Promise<{ deletedKeyId: string; alreadyGone: boolean }> => broker.revokeOperatorKey();
 
@@ -42,10 +42,10 @@ export function KeySecurityPanel({
   /** Called after a successful revoke, so the app re-probes identity (now dead). */
   onRevoked?: () => void;
   /** Injected in tests. */
-  loadInfo?: () => Promise<{ profileKeyId: string | null; mintedAt: string | null }>;
+  loadInfo?: () => Promise<{ profileKeyId: string | null; mintedAt: string | null; secretCustody?: "keychain" | "file" | "none" }>;
   revoke?: () => Promise<{ deletedKeyId: string; alreadyGone: boolean }>;
 }) {
-  const [info, setInfo] = useState<{ profileKeyId: string | null; mintedAt: string | null } | null>(null);
+  const [info, setInfo] = useState<{ profileKeyId: string | null; mintedAt: string | null; secretCustody?: "keychain" | "file" | "none" } | null>(null);
   const [phase, setPhase] = useState<RevokePhase>({ kind: "idle" });
 
   useEffect(() => {
@@ -106,6 +106,14 @@ export function KeySecurityPanel({
       <p className="muted">
         Key <code>{info.profileKeyId}</code>
         {age !== null ? <> · created {age === 0 ? "today" : `${age} day${age === 1 ? "" : "s"} ago`}</> : null}
+        {/* Custody, phase 2: where the SECRET half lives. The founder's positioning line —
+            safer than the old way of keeping a key in a file — earned only when true, so
+            "file" states it plainly rather than pretending. */}
+        {info.secretCustody === "keychain" ? (
+          <> · secret in the macOS Keychain — not in any file</>
+        ) : info.secretCustody === "file" ? (
+          <> · secret in ~/.aws/credentials</>
+        ) : null}
       </p>
       {age !== null && age >= ROTATION_NUDGE_DAYS && (
         <p className="inline-warning">

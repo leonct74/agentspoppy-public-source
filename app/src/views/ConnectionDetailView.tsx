@@ -2,13 +2,14 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.0
 
 import { useState } from "react";
-import type { ActivityEvent, AuditEntry, Connection, InfraGraph, Inventory, ResidualResource } from "@agentspoppy/core";
+import type { ActivityEvent, AuditEntry, Connection, Finding as CoreFinding, InfraGraph, Inventory, ResidualResource } from "@agentspoppy/core";
 import {
   assessPermissionSet,
   brokerGuarantees,
   grantCannotBeNarrowed,
   serviceStake,
   summarizeObserved,
+  buildFindings,
   awsConsoleUrl,
   grantCanDestroy,
   grantCanLaunchUntracked,
@@ -188,68 +189,29 @@ export function ConnectionDetailView(props: ConnectionDetailViewProps) {
     return tb - ta;
   });
 
-  type Finding = {
-    level: "high" | "medium";
-    title: string;
-    body: string;
-    gated: boolean;
-    service?: string;
+  // Panel 3 — "What to weigh before you say yes" (docs/specs/permission-presentation.md).
+  // Computed in core (buildFindings) so the screen, the catalogue and the release preview
+  // all render the same findings from the same code. Grouped by MEANING, worst first, each
+  // row opening to the exact actions behind it — this is the panel that replaces the
+  // single verdict, and the reader may disagree with any one line.
+  const findings = buildFindings(c.permissionSet);
+
+  // What each finding's services have ACTUALLY done, from the observed register — one line
+  // per row, so the ceiling and the record sit together. Absent while loading/unreadable;
+  // the panel-level note carries that state once instead of every row repeating it.
+  const observedLine = (f: CoreFinding): string | null => {
+    if (props.observed == null || props.observed === "unavailable" || f.services.length === 0) return null;
+    const days = Math.round(props.observed.sinceMinutes / (24 * 60));
+    const ob = summarizeObserved(props.observed.events);
+    const rows = ob.rows.filter((r) => f.services.includes(r.service));
+    if (rows.length === 0) return `Not used in the last ${days} days.`;
+    const changes = rows.reduce((n, r) => n + r.changes, 0);
+    const reads = rows.reduce((n, r) => n + r.reads, 0);
+    return `Used in the last ${days} days: ${changes} change${changes === 1 ? "" : "s"}, ${reads} read${reads === 1 ? "" : "s"}.`;
   };
 
-  // THE STANDARD these two sections follow (docs/specs/permission-presentation.md):
-  //
-  //   "What it can do"  — the BOUNDARY of each permission. What is inside the fence.
-  //   "What's at stake" — the CONSEQUENCE if that boundary is not maintained.
-  //
-  // They answer different questions, so they legitimately carry different colours for the
-  // same grant, and a confined grant can still be red here. AffiliatePoppy's IAM grant is
-  // bounded to `role/AffiliatePoppy*` — that is the boundary, and it is narrow. But if that
-  // boundary ever failed, what leaks is the power to decide who can do what, which is the
-  // worst thing on the list. Both statements are true at once; the old heading ("Risks to the
-  // rest of your account") was what made them read as a contradiction, because it asserted
-  // reach the scope line had just denied.
-  const stakeFindings: Finding[] = [
-    ...risk.grants
-      .filter(({ risk: gr }) => (!gr.scoped || gr.level === "high") && gr.level !== "low")
-      .map(({ grant, risk: gr }) => ({
-        level: gr.level as "high" | "medium",
-        title:
-          gr.level === "high"
-            ? gr.scoped
-              ? `${grant.service.toUpperCase()} — controls who can do what in your account`
-              : grantCanLaunchUntracked(grant) && !grantCanDestroy(grant)
-                ? `${grant.service.toUpperCase()} — can start up resources AgentsPoppy cannot track`
-                : `${grant.service.toUpperCase()} — can change resources beyond its own`
-            : grantCanMutate(grant)
-              ? `${grant.service.toUpperCase()} — can create new resources in your account`
-              : `${grant.service.toUpperCase()} — can read resources beyond its own`,
-        body: gr.reason,
-        // `gated` means supervision actually holds this for approval — which is driven by
-        // hasUnscopedGrants (broker service.ts). A CONFINED grant is never why a connection is
-        // supervised, and the Supervised pill's tooltip says it is, so it must not carry one.
-        gated: !gr.scoped,
-        service: grant.service.toUpperCase(),
-      })),
-    ...risk.warnings.map((w) => ({
-      level: "medium" as const,
-      title: "Footprint can't be tracked or torn down",
-      body: w,
-      gated: false,
-    })),
-  ]
-    // Worst first, not manifest order. This panel closes the page, and most readers stop
-    // after the first card or two — the order decides what they actually learn. High before
-    // medium; within a level, account-wide reach before confined.
-    .sort((a, b) => {
-      if (a.level !== b.level) return a.level === "high" ? -1 : 1;
-      if (a.gated !== b.gated) return a.gated ? -1 : 1;
-      return 0;
-    });
-
-  // The capabilities that make this connection reach beyond its own resources — the reason
-  // it's supervised. Confined grants are excluded above, so this can no longer name one.
   const reachServices = [
-    ...new Set(stakeFindings.filter((f) => f.gated && f.service).map((f) => f.service as string)),
+    ...new Set(findings.filter((f) => f.gated).flatMap((f) => f.services.map((x) => x.toUpperCase()))),
   ];
 
   return (
@@ -965,6 +927,69 @@ export function ConnectionDetailView(props: ConnectionDetailViewProps) {
         </div>
       )}
 
+      <h3>What to weigh before you say yes</h3>
+      <p className="muted section-note">
+        Grouped by what it means, worst first. Open a row for the exact permissions behind it —
+        you can disagree with any one line, which is the point.
+      </p>
+      {findings.length === 0 ? (
+        <div className="risk-card risk-card--ok">
+          <Icon name="check" />
+          <div>
+            <strong>Nothing here reaches beyond its own resources</strong>
+            <p>Every permission is confined, and none of them touches how access is granted.</p>
+          </div>
+        </div>
+      ) : (
+        <div className="findings">
+          {/* Every row starts COLLAPSED (founder, 2026-09-01): the summary line is the
+              panel — title, triage, supervision — and opening it is the reader's choice,
+              not ours. Pre-expanding the worst rows made the screen a wall of alarm. */}
+          {findings.map((f) => (
+            <details key={f.id} className={`finding finding--${f.triage}`}>
+              <summary>
+                {f.services.length > 0 && (
+                  <span className="finding-svc">{f.services.map((x) => x.toUpperCase()).join(" · ")}</span>
+                )}
+                <span className="finding-title">{f.title}</span>
+                <span className={`pill-triage pill-triage--${f.triage}`}>
+                  {f.triage === "weigh" ? "Weigh this" : f.triage === "know" ? "Worth knowing" : f.triage === "forced" ? "AWS gives no narrower form" : "Nothing to weigh"}
+                </span>
+                {c.supervised && f.gated && (
+                  <span
+                    className="supervised-pill"
+                    title={`Supervised — this access reaches beyond ${c.app.name}'s own resources. AgentsPoppy holds its credentials for your approval, so nothing here happens until you say yes.`}
+                  >
+                    <span className="supervised-dot" /> Supervised
+                  </span>
+                )}
+              </summary>
+              <div className="finding-body">
+                {f.context && <p className="finding-context">{f.context}</p>}
+                {f.reason && (
+                  <p className="cap-reason">
+                    <span className="cap-reason-label">Developer&rsquo;s note — in their own words</span>
+                    {f.reason}
+                  </p>
+                )}
+                <div className="finding-acts">
+                  {([["Changes", f.actions.changes], ["Creates", f.actions.creates], ["Sends", f.actions.sends], ["Labels", f.actions.labels], ["Reads", f.actions.reads], ["Reads secrets", f.actions.secrets]] as const).map(
+                    ([label, acts]) =>
+                      acts.length > 0 && (
+                        <p key={label} className="finding-actline">
+                          <b>{label}:</b> {acts.join(", ")}
+                        </p>
+                      ),
+                  )}
+                </div>
+                <p className="finding-scope">{f.scopeLine}</p>
+                {observedLine(f) && <p className="finding-observed">{observedLine(f)}</p>}
+              </div>
+            </details>
+          ))}
+        </div>
+      )}
+
       <h3>Activity</h3>
       <ul className="audit">
         {recentFirst.map((a, i) => (
@@ -978,47 +1003,7 @@ export function ConnectionDetailView(props: ConnectionDetailViewProps) {
         ))}
       </ul>
 
-      <h3>What's at stake if these limits don't hold</h3>
-      <p className="muted section-note">
-        Above is what {c.app.name} can reach. This is what would be exposed if one of those
-        limits failed — so a tightly-bounded permission can still be serious here, and that is
-        not a contradiction.
-      </p>
-      {stakeFindings.length === 0 ? (
-        <div className="risk-card risk-card--ok">
-          <Icon name="check" />
-          <div>
-            <strong>Nothing here would reach beyond its own resources</strong>
-            <p>Every permission is bounded, and none of them touches how access is granted.</p>
-          </div>
-        </div>
-      ) : (
-        <div className="risk-grid">
-          {stakeFindings.map((f, i) => (
-            <div key={i} className={`risk-card risk-card--${f.level}`}>
-              <Icon name="shield" />
-              <div>
-                <strong>{f.title}</strong>
-                <p>{f.body}</p>
-                {/* The hand-written half of Panel 3: what this SERVICE controls, so the
-                    consequence is legible without AWS knowledge. Platform-authored fact
-                    about AWS itself — a missing entry renders nothing, never filler. */}
-                {f.service && serviceStake(f.service) ? (
-                  <p className="stake-context">{serviceStake(f.service)}</p>
-                ) : null}
-              </div>
-              {c.supervised && f.gated && (
-                <span
-                  className="supervised-pill"
-                  title={`Supervised — this ${f.service ?? "capability"} access reaches beyond ${c.app.name}'s own resources, which is why the connection is supervised. AgentsPoppy holds its credentials for your approval, so nothing here happens until you say yes.`}
-                >
-                  <span className="supervised-dot" /> Supervised
-                </span>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
+
     </section>
   );
 }

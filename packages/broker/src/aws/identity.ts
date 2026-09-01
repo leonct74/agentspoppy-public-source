@@ -17,6 +17,7 @@ import {
   clearOperatorKeyRecord,
   operatorCredentials,
   readAgentsPoppyProfileKeyId,
+  secretCustody,
   readOperatorKeyRecord,
   removeAgentsPoppyProfile,
   writeAgentsPoppyProfile,
@@ -47,6 +48,12 @@ export interface OperatorKeyInfo {
   profileKeyId: string | null;
   /** When THIS machine minted its operator key (null: unknown / pre-record install). */
   mintedAt: string | null;
+  /**
+   * Where the SECRET half lives (docs/specs/operator-key-custody.md): "keychain" — the
+   * OS vault, the file holds nothing secret; "file" — inline in ~/.aws/credentials
+   * (legacy, or a non-macOS platform); "none" — no profile stored.
+   */
+  secretCustody: "keychain" | "file" | "none";
 }
 
 /** The kill switch failed for a reason the UI must route, not just display. */
@@ -123,6 +130,7 @@ export function sdkAwsBootstrap(): AwsBootstrap {
       return {
         profileKeyId: readAgentsPoppyProfileKeyId(),
         mintedAt: readOperatorKeyRecord()?.mintedAt ?? null,
+        secretCustody: secretCustody(),
       };
     },
 
@@ -241,7 +249,7 @@ export class StubAwsBootstrap implements AwsBootstrap {
     return { ok: true, assumedArn: `${roleArn}/${HOST_SESSION_PREFIX}verify` };
   }
   async operatorKeyInfo(): Promise<OperatorKeyInfo> {
-    return { profileKeyId: "AKIASTUBOPERATORKEY", mintedAt: new Date().toISOString() };
+    return { profileKeyId: "AKIASTUBOPERATORKEY", mintedAt: new Date().toISOString(), secretCustody: "keychain" };
   }
   async revokeOperatorKey(): Promise<{ deletedKeyId: string; alreadyGone: boolean }> {
     // Demo/test: simulate the revoke without touching AWS or ~/.aws.

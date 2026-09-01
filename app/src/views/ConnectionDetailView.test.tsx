@@ -128,11 +128,14 @@ describe("ConnectionDetailView — policy risk", () => {
       requiredTags: ["agentspoppy:account", "agentspoppy:app", "agentspoppy:connection"],
       limits: null,
     });
-    expect(screen.getByText("Nothing here would reach beyond its own resources")).toBeTruthy();
-    expect(screen.getByText("S3")).toBeTruthy(); // capability box header
+    // A fully-confined poppy's whole story is one green row — with the full drill-down,
+    // not an empty pat on the head.
+    expect(screen.getByText("Everything is confined to its own resources")).toBeTruthy();
+    expect(screen.getByText("Nothing to weigh")).toBeTruthy();
+    expect(screen.getAllByText("S3").length).toBeGreaterThan(0); // capability box header + finding chip
   });
 
-  it("badges each gated risk with a Supervised pill when supervision is on", () => {
+  it("badges each gated finding with a Supervised pill when supervision is on", () => {
     renderDetail(
       {
         id: "p", name: "P", description: "",
@@ -142,8 +145,8 @@ describe("ConnectionDetailView — policy risk", () => {
       },
       { supervised: true },
     );
-    expect(screen.getByText("IAM — can change resources beyond its own")).toBeTruthy();
-    // The per-service risk carries the reassurance pill...
+    expect(screen.getByText("Can change and delete roles and permissions you did not create")).toBeTruthy();
+    // The gated finding carries the reassurance pill...
     const pill = screen.getByText("Supervised");
     expect(pill.getAttribute("title")).toMatch(/approval/i);
   });
@@ -158,7 +161,7 @@ describe("ConnectionDetailView — policy risk", () => {
       },
       { supervised: false },
     );
-    expect(screen.getByText("IAM — can change resources beyond its own")).toBeTruthy();
+    expect(screen.getByText("Can change and delete roles and permissions you did not create")).toBeTruthy();
     expect(screen.queryByText("Supervised")).toBeNull();
   });
 
@@ -169,10 +172,10 @@ describe("ConnectionDetailView — policy risk", () => {
       requiredTags: [],
       limits: null,
     });
-    expect(screen.queryByText("Nothing here would reach beyond its own resources")).toBeNull();
-    expect(screen.getByText("IAM — can change resources beyond its own")).toBeTruthy();
-    // missing attribution tags surfaces its own finding
-    expect(screen.getByText("Footprint can't be tracked or torn down")).toBeTruthy();
+    expect(screen.getByText("Can change and delete roles and permissions you did not create")).toBeTruthy();
+    expect(document.querySelector(".finding--weigh")).toBeTruthy();
+    // missing attribution labels surfaces its own weigh-this finding
+    expect(screen.getByText(/Doesn’t label what it makes/)).toBeTruthy();
   });
 
   it("offers Approve/Deny while pending so you can decide after reviewing", () => {
@@ -621,9 +624,13 @@ describe("ConnectionDetailView — a scoped grant can still be serious", () => {
     expect(screen.getByText("Its own — permissions")).toBeTruthy();
   });
 
-  it("lists it under the risks, not only as a badge", () => {
+  it("lists it among the findings, not only as a badge", () => {
     renderDetail(iamSet);
-    expect(screen.getByText(/IAM — controls who can do what in your account/)).toBeTruthy();
+    // Confined to its own roles AND still a weigh-this finding: creating a role is
+    // creating an identity, whatever it is named.
+    expect(screen.getByText("Creates and manages its own roles and permissions")).toBeTruthy();
+    const row = screen.getByText("Creates and manages its own roles and permissions").closest("details");
+    expect(row?.className).toContain("finding--weigh");
   });
 
   // The contradiction: a red Unscoped badge with "Resources matching <pattern>" printed
@@ -655,10 +662,12 @@ describe("the boundary / consequence standard (docs/specs/permission-presentatio
     // the boundary, on the capability card
     expect(screen.getAllByText(/role\/AffiliatePoppy/i).length).toBeGreaterThan(0);
     // the consequence, kept — a confined grant is not filtered out for being confined
-    expect(screen.getAllByText(/controls who can do what in your account/i).length).toBeGreaterThan(0);
-    // …under a heading that asserts consequence, never reach
-    expect(screen.getByText(/What's at stake if these limits don't hold/i)).toBeTruthy();
+    expect(screen.getByText("Creates and manages its own roles and permissions")).toBeTruthy();
+    expect(screen.getAllByText(/where AWS keeps who can do what/i).length).toBeGreaterThan(0);
+    // …under a heading that invites judgement, never asserts reach — and no meta-commentary
+    expect(screen.getByText(/What to weigh before you say yes/i)).toBeTruthy();
     expect(screen.queryByText(/Risks to the rest of your account/i)).toBeNull();
+    expect(screen.queryByText(/not a contradiction/i)).toBeNull();
   });
 
   it("does not blame a confined grant for supervision", () => {
@@ -674,7 +683,7 @@ describe("the boundary / consequence standard (docs/specs/permission-presentatio
       grants: [{ service: "ses", actions: ["SendEmail", "DeleteIdentity"], resourceScope: "*" }],
     };
     renderDetail(unscoped, { supervised: true });
-    expect(screen.getByText(/beyond its own/i)).toBeTruthy();
+    expect(screen.getByText(/email settings you did not create/i)).toBeTruthy();
     expect(screen.getAllByText(/^Supervised$/).length).toBeGreaterThan(0);
   });
 });
@@ -870,23 +879,32 @@ describe("the page order — the floor opens, the risks close (founder, 2026-09-
     const heads = [...document.querySelectorAll("h3")].map((h) => h.textContent ?? "");
     expect(heads[0]).toMatch(/Controls/);
     expect(heads[1]).toMatch(/What AgentsPoppy enforces/);
-    expect(heads[heads.length - 1]).toMatch(/What's at stake/);
+    // The weigh panel sits before Activity (founder, 2026-09-01) — the last
+    // permission panel, with the audit log after it.
+    expect(heads[heads.length - 1]).toMatch(/Activity/);
+    expect(heads[heads.length - 2]).toMatch(/What to weigh before you say yes/);
     // and the boundary still precedes the observed record
     expect(heads.indexOf("What it can do")).toBeLessThan(heads.findIndex((h) => /actually done/.test(h)));
   });
 
-  it("orders the risks worst-first, not in manifest order", () => {
+  it("every row starts collapsed — opening it is the reader's choice", () => {
     renderDetail(base, { supervised: true });
-    const titles = [...document.querySelectorAll(".risk-card:not(.supervise-card) strong")].map(
-      (e) => e.textContent ?? "",
+    for (const d of document.querySelectorAll("details.finding")) {
+      expect((d as HTMLDetailsElement).open).toBe(false);
+    }
+  });
+
+  it("orders the findings worst-first, not in manifest order", () => {
+    // Manifest declares mildest-first (sts, then route53, then iam) — the panel must not.
+    renderDetail(base, { supervised: true });
+    const triages = [...document.querySelectorAll("details.finding")].map((d) =>
+      [...d.classList].find((c) => c.startsWith("finding--")),
     );
-    // high grants (route53 wide, iam confined) before the medium sts read; wide before confined
-    const r53 = titles.findIndex((t) => t.startsWith("ROUTE53"));
-    const iam = titles.findIndex((t) => t.startsWith("IAM"));
-    const sts = titles.findIndex((t) => t.startsWith("STS"));
-    expect(r53).toBeGreaterThanOrEqual(0);
-    expect(r53).toBeLessThan(iam);
-    expect(iam).toBeLessThan(sts);
+    // weigh rows first (route53 wide + iam confined-high), then the forced sts read
+    expect(triages.slice(0, 2)).toEqual(["finding--weigh", "finding--weigh"]);
+    expect(triages.indexOf("finding--forced")).toBeGreaterThan(1);
+    const first = document.querySelector("details.finding .finding-title")?.textContent ?? "";
+    expect(first).toMatch(/DNS records you did not create/);
   });
 });
 

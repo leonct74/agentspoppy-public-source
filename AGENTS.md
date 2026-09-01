@@ -197,10 +197,18 @@ platform patches touching its enforcement points are checked against that docume
   disable CloudTrail, or attach admin policies — and per-connection scoping only ever _narrows_ it.
   Don't design around this; you can't escalate, by construction.
 
-- **Say why, whenever you reach beyond your own resources — REQUIRED.** Any grant that is not
-  confined (`"*"`, or a pattern that matches everything of its type) MUST carry a `reason`: plain
-  language, for the user deciding whether to install you, not for a reviewer. `npm run
-  validate-manifest` **fails** until every one has it.
+- **Say what it's FOR, whenever you reach beyond your own resources — REQUIRED.** Any grant that
+  is not confined (`"*"`, or a pattern that matches everything of its type) MUST carry a `reason`:
+  one or two short sentences saying what your app USES the permission for, in the user's words.
+  `npm run validate-manifest` **fails** until every one has it.
+
+  **One job only.** Do NOT explain scope mechanics — "AWS publishes no resource type for this
+  call", "there is no ARN to scope to", "this is a known gap" — the screen computes and displays
+  all of that itself (which actions AWS refuses to narrow, how many could be narrowed, what the
+  scope reaches). A note that justifies the scope instead of explaining the purpose reads as
+  jargon to the person it is for, and the first eight written this way were rejected verbatim by
+  the founder as "not human understandable at all". Test: read your note aloud to someone who has
+  never opened the AWS console. If it names an API, a scope, an ARN or a "grant", rewrite it.
 
   Why this is a rule and not a nicety: the approval screen has three registers, and only one of
   them can come from you.
@@ -221,7 +229,7 @@ platform patches touching its enforcement points are checked against that docume
     "service": "route53",
     "actions": ["ChangeResourceRecordSets"],
     "resourceScope": "*",
-    "reason": "Points the address you typed at your site. AWS does not let record changes be limited to one domain, so this permission covers every zone you host — HostingPoppy only ever writes the record you asked for, and shows you what is there first."
+    "reason": "Points the web address you typed at your site — after showing you what that address points at today, and only once you approve that exact change."
   }
   ```
 
@@ -502,7 +510,7 @@ A minimal frontend-only manifest:
         "service": "s3",
         "actions": ["ListAllMyBuckets"],
         "resourceScope": "*",                            // AWS publishes no resource type for this one
-        "reason": "Lists bucket NAMES only, never contents — it is how \"Remove everything\" proves nothing of ours is left behind. AWS offers no narrower form of this permission."
+        "reason": "Lists your buckets by name, so \"Remove everything\" can prove nothing of ours was left behind. Names only — never what is inside."
       }
     ],
     "limits": null

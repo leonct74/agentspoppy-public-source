@@ -21,7 +21,7 @@
  * shows it as not applying rather than dropping it. A user comparing two poppies can then see
  * that one is tag-attributable and the other is not.
  */
-import { hasAttributionTags, grantIsTagScoped } from "./permissions";
+import { hasAttributionTags, grantCanMutate, grantIsTagScoped } from "./permissions";
 import type { PermissionSet } from "./types";
 
 /**
@@ -57,7 +57,15 @@ export interface GuaranteeContext {
  */
 export function brokerGuarantees(ps: PermissionSet, ctx: GuaranteeContext): Guarantee[] {
   const anyTagScoped = ps.grants.some(grantIsTagScoped);
-  const attributable = hasAttributionTags(ps);
+  // What AWS actually REFUSES, not what the manifest declares. Labelling is IAM-enforced
+  // only on tagged-as-self creates (I3's aws:RequestTag condition); a name-scoped or wide
+  // create can be made unlabelled and IAM will not stop it. Keying this on
+  // hasAttributionTags — a manifest claim — put a green tick reading "everything it makes
+  // is labelled as its own" on poppies where 13 of 18 mutating grants have no such
+  // enforcement. In the ENFORCED-FLOOR panel, of all places.
+  const mutating = ps.grants.filter(grantCanMutate);
+  const labellingEnforced =
+    hasAttributionTags(ps) && mutating.length > 0 && mutating.every(grantIsTagScoped);
 
   return [
     {
@@ -123,12 +131,20 @@ export function brokerGuarantees(ps: PermissionSet, ctx: GuaranteeContext): Guar
     },
     {
       id: "sweepable",
-      text: "Its whole footprint is findable in one query, which is what “remove everything” sweeps.",
-      pin: "invariant I4 — certified against a real deploy and teardown",
-      holds: attributable,
-      ...(attributable
+      text: "AWS refuses to create anything for it that isn’t labelled as its own, so “remove everything” finds all of it.",
+      pin: "invariant I3 — an aws:RequestTag condition on every create",
+      holds: labellingEnforced,
+      ...(labellingEnforced
         ? {}
-        : { absent: "This poppy has not declared the attribution tags, so removing it cannot rely on a single sweep." }),
+        : {
+            // NOT alarming (rule 6), and not a claim that removal fails — it usually does
+            // not. Say what actually protects the user here: removal deletes the stacks it
+            // made (everything inside goes, labelled or not) and sweeps by label for
+            // strays. The honest limit is only that the labelling of those strays is the
+            // poppy's own doing rather than something AWS refuses to skip.
+            absent:
+              "Removing it deletes the stacks it created, and sweeps for anything labelled as its own. Labelling those extras is this poppy’s own doing rather than something AWS enforces.",
+          }),
     },
     {
       id: "supervised",

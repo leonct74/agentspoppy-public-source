@@ -167,7 +167,7 @@ export class BrokerService {
 
   /** This machine's operator-key id + mint time (never secrets) — the key-age nudge. */
   async getOperatorKeyInfo(): Promise<OperatorKeyInfo> {
-    if (!this.aws.operatorKeyInfo) return { profileKeyId: null, mintedAt: null };
+    if (!this.aws.operatorKeyInfo) return { profileKeyId: null, mintedAt: null, secretCustody: "none" };
     return this.aws.operatorKeyInfo();
   }
 

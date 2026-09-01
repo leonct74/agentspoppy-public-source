@@ -405,8 +405,10 @@ export function App() {
   const healthWord =
     awsHealth === "healthy" ? "secured" : awsHealth === "unauthorized" ? "access needs a fix" : awsHealth === "unreachable" ? "credentials down" : "not connected";
 
+  // The 1200px reading cap is for the console's prose. A poppy tab lifts it — the
+  // whole window belongs to the poppy (founder, 2026-09-01).
   return (
-    <div className="shell">
+    <div className={view.type === "extension" ? "shell shell--full" : "shell"}>
       <div className="shell-body">
       <Sidebar
         active={activeSection}
@@ -448,7 +450,11 @@ export function App() {
         }
       />
 
-      <main className="shell-main">
+      {/* A poppy tab runs FLUSH (founder, 2026-09-01): the host's padding — especially
+          the 64px at the bottom — cost the poppy real space in an unmaximised window.
+          Console views keep the padding; a poppy gets every pixel, and manages its own
+          scrolling instead of scrolling inside a scrolling host. */}
+      <main className={view.type === "extension" ? "shell-main shell-main--flush" : "shell-main"}>
         {error && <div className="banner banner-error">{error}</div>}
 
         {needsRoleRepair && primaryAccount && (

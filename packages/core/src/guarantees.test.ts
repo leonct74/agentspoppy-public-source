@@ -57,10 +57,41 @@ describe("the conditional guarantees say when they do not hold", () => {
     expect(g.absent).toMatch(/naming its resources/);
   });
 
-  it("sweepable holds only with the attribution tags declared", () => {
-    expect(byId(ps(), true)["sweepable"].holds).toBe(true);
-    const untagged = ps({ requiredTags: [] });
-    expect(byId(untagged, true)["sweepable"].holds).toBe(false);
+  it("sweepable holds on what AWS ENFORCES, not on what the manifest declares", () => {
+    // The bug this replaced: keyed on hasAttributionTags — a manifest claim — it put a green
+    // tick reading "everything it makes is labelled as its own" in the ENFORCED-FLOOR panel
+    // for poppies where almost no create is IAM-enforced. Labelling is enforced only on
+    // tagged-as-self creates (I3's aws:RequestTag condition).
+    expect(byId(ps(), true)["sweepable"].holds).toBe(true); // sole mutating grant is tag-scoped
+
+    // declares all three labels, but its mutating grant is NAME-scoped: not enforced
+    const named = ps({ grants: [{ service: "s3", actions: ["CreateBucket"], resourceScope: "arn:aws:s3:::x*" }] });
+    expect(byId(named, true)["sweepable"].holds).toBe(false);
+
+    // one tag-scoped grant does not carry the others
+    const mixed = ps({
+      grants: [
+        { service: "s3", actions: ["CreateBucket"], resourceScope: TAGGED_AS_SELF },
+        { service: "dynamodb", actions: ["CreateTable"], resourceScope: "arn:aws:dynamodb:*:*:table/X*" },
+      ],
+    });
+    expect(byId(mixed, true)["sweepable"].holds).toBe(false);
+
+    // and the labels must still be declared even when every grant is tag-scoped
+    expect(byId(ps({ requiredTags: [] }), true)["sweepable"].holds).toBe(false);
+  });
+
+  it("its absence explains what still protects you, without alarm (rule 6)", () => {
+    const named = ps({ grants: [{ service: "s3", actions: ["CreateBucket"], resourceScope: "arn:aws:s3:::x*" }] });
+    const g = byId(named, true)["sweepable"];
+    // says what removal DOES do — it is not a warning that removal fails, because it usually
+    // does not: the stacks are deleted whether or not their contents carry a label
+    expect(g.absent).toMatch(/deletes the stacks it created/i);
+    expect(g.absent).toMatch(/sweeps for anything labelled as its own/i);
+    // never our jargon, never "go audit AWS yourself", never a scare
+    expect(g.absent).not.toMatch(/attribution tag|declare/i);
+    expect(g.absent).not.toMatch(/check(ing)? your account|check AWS/i);
+    expect(g.absent).not.toMatch(/cannot be removed|left behind|unsafe|risk/i);
   });
 
   it("supervision reflects the LIVE connection, not the default", () => {

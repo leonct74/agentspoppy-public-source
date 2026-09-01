@@ -189,6 +189,28 @@ async function seed(service: BrokerService): Promise<void> {
     regions: ["eu-west-1"],
   });
 
+  // Review affordance (founder, 2026-09-01: "I want to see a live version"): seed from
+  // REAL extension.json manifests instead of the toy set, so the permission screen is
+  // judged on real data. Colon-separated paths; approved immediately so the detail view
+  // is one click away. Dev-only — this whole function runs only behind --seed.
+  const manifestPaths = (process.env.AGENTSPOPPY_SEED_MANIFESTS ?? "").split(":").filter(Boolean);
+  if (manifestPaths.length > 0) {
+    const { readFileSync } = await import("node:fs");
+    for (const path of manifestPaths) {
+      const m = JSON.parse(readFileSync(path, "utf8")) as {
+        id: string; name: string; permissionSet: Connection["permissionSet"];
+      };
+      const conn = await service.requestConnection({
+        accountId: account.id,
+        app: { id: m.id, name: m.name },
+        permissionSet: m.permissionSet,
+      });
+      await service.approve(conn.id);
+    }
+    console.log(`seeded from real manifests: ${manifestPaths.length}`);
+    return;
+  }
+
   const mailpoppy = await service.requestConnection({
     accountId: account.id,
     app: { id: "com.mailpoppy.desktop", name: "MailPoppy" },
@@ -297,6 +319,16 @@ async function main(): Promise<void> {
     process.env.AGENTSPOPPY_DEMO === "1" ||
     process.env.AGENTSPOPPY_SIMULATE === "no-aws";
   const { credentials, cloud, aws, activity } = buildProviders(demo);
+  // Phase-2 custody migration (docs/specs/operator-key-custody.md): an inline operator
+  // secret on macOS moves into the Keychain — verified readback before the file is
+  // touched, any failure leaves everything as it was. Once per start, logged, never fatal.
+  if (!demo) {
+    const { migrateSecretToKeychain } = await import("./aws/credentials");
+    const custody = migrateSecretToKeychain();
+    if (custody === "migrated") console.log("operator key: secret moved into the macOS Keychain");
+    else if (custody === "failed") console.log("operator key: Keychain migration failed — secret stays in ~/.aws/credentials");
+  }
+
   const service = new BrokerService({ store: new Store(), credentials, cloud, aws, activity });
 
   if (wantSeed) await seed(service);

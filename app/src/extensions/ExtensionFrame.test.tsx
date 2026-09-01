@@ -108,3 +108,30 @@ describe("ExtensionFrame", () => {
     expect(ensure).not.toHaveBeenCalled();
   });
 });
+
+describe("a poppy tab is flush (founder, 2026-09-01)", () => {
+  // The host's padding — especially the 64px at the bottom — and the shell's 1200px
+  // reading cap cost the poppy real space in an unmaximised window. The classes below
+  // are what lift both; App.tsx applies them exactly when view.type === "extension".
+  it("the frame flexes instead of pinning a 70vh minimum", async () => {
+    const { fileURLToPath } = await import("node:url");
+    const { dirname, join } = await import("node:path");
+    const here = dirname(fileURLToPath(import.meta.url));
+    const css = (await import("node:fs")).readFileSync(join(here, "../theme.css"), "utf8");
+    const frame = css.slice(css.indexOf(".ext-frame {"), css.indexOf("}", css.indexOf(".ext-frame {")));
+    expect(frame).toMatch(/min-height: 0;/);
+    expect(frame).not.toMatch(/min-height:\s*70vh/);
+    // and the flush + full classes exist with the properties that do the work
+    expect(css).toMatch(/\.shell-main--flush \{[^}]*padding: 0/);
+    expect(css).toMatch(/\.shell--full \{[^}]*max-width: none/);
+  });
+
+  it("App switches both classes on the extension view", async () => {
+    const { fileURLToPath } = await import("node:url");
+    const { dirname, join } = await import("node:path");
+    const here = dirname(fileURLToPath(import.meta.url));
+    const app = (await import("node:fs")).readFileSync(join(here, "../App.tsx"), "utf8");
+    expect(app).toContain('view.type === "extension" ? "shell shell--full" : "shell"');
+    expect(app).toContain('view.type === "extension" ? "shell-main shell-main--flush" : "shell-main"');
+  });
+});

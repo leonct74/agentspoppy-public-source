@@ -13,10 +13,18 @@
  * The writer mirrors `aws configure`: it upserts only the `[agentspoppy]` section
  * of ~/.aws/credentials (dir 0700, file 0600), leaving every other profile
  * intact, and never writes `[default]`. The secret is never logged.
+ *
+ * Custody, phase 2 (docs/specs/operator-key-custody.md): on macOS the SECRET half
+ * lives in the Keychain, and the profile keeps only the key id plus a marker
+ * comment — the file contains nothing secret. Resolution is key id from the file
+ * + secret from the Keychain; a keychain-marked profile whose item is gone fails
+ * LOUDLY, never silently through to the SDK chain, because the chain could
+ * resolve a different identity and misattribute everything downstream.
  */
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { keychainAvailable, keychainRead, keychainRemove, keychainStore } from "./keychain";
 
 /** The profile the in-app key entry writes to (never `default`). */
 export const AGENTSPOPPY_PROFILE = "agentspoppy";
@@ -76,6 +84,82 @@ export function readAgentsPoppyProfileKeyId(): string | null {
   }
 }
 
+/** The comment the writer leaves in place of the secret when the Keychain holds it. */
+export const KEYCHAIN_MARKER = "# aws_secret_access_key is in the macOS Keychain (AgentsPoppy)";
+
+/** The inline secret in the `[agentspoppy]` section, or null (absent or keychain-marked). */
+export function readProfileInlineSecret(): string | null {
+  try {
+    const p = credentialsPath();
+    if (!existsSync(p)) return null;
+    let inSection = false;
+    for (const line of readFileSync(p, "utf8").split("\n")) {
+      if (/^\s*\[.*\]\s*$/.test(line)) {
+        inSection = line.replace(/\s/g, "") === `[${AGENTSPOPPY_PROFILE}]`;
+        continue;
+      }
+      if (!inSection) continue;
+      const m = /^\s*aws_secret_access_key\s*=\s*(\S+)\s*$/.exec(line);
+      if (m) return m[1]!;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** True when the profile carries a session token (temporary creds — custody skips them). */
+function profileHasSessionToken(): boolean {
+  try {
+    const p = credentialsPath();
+    if (!existsSync(p)) return false;
+    let inSection = false;
+    for (const line of readFileSync(p, "utf8").split("\n")) {
+      if (/^\s*\[.*\]\s*$/.test(line)) {
+        inSection = line.replace(/\s/g, "") === `[${AGENTSPOPPY_PROFILE}]`;
+        continue;
+      }
+      if (inSection && /^\s*aws_session_token\s*=/.test(line)) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/** Where the operator secret lives right now — the UI's custody line. */
+export function secretCustody(): "keychain" | "file" | "none" {
+  if (!agentspoppyProfileExists()) return "none";
+  if (readProfileInlineSecret() !== null) return "file";
+  return "keychain";
+}
+
+/**
+ * Phase-2 migration, called once at broker start (docs/specs/operator-key-custody.md):
+ * an inline secret on macOS moves into the Keychain — write, READ BACK AND COMPARE,
+ * and only then rewrite the profile without it. Any failure leaves the file exactly
+ * as it was. Session-token profiles are skipped (temporary creds expire on their own).
+ */
+export function migrateSecretToKeychain(): "migrated" | "already" | "skipped" | "failed" {
+  try {
+    if (!keychainAvailable() || !agentspoppyProfileExists()) return "skipped";
+    if (profileHasSessionToken()) return "skipped";
+    const secret = readProfileInlineSecret();
+    if (secret === null) return "already";
+    const keyId = readAgentsPoppyProfileKeyId();
+    if (!keyId) return "skipped";
+    if (!keychainStore(keyId, secret)) return "failed"; // verified readback inside
+    const p = credentialsPath();
+    const existing = readFileSync(p, "utf8");
+    const lines = [`aws_access_key_id = ${keyId}`, KEYCHAIN_MARKER];
+    writeFileSync(p, upsertIniSection(existing, AGENTSPOPPY_PROFILE, lines), { mode: 0o600 });
+    enforceProfilePermissions();
+    return "migrated";
+  } catch {
+    return "failed";
+  }
+}
+
 /**
  * The operator credential provider shared by every AWS client in the broker: the
  * dedicated `[agentspoppy]` profile if present, else the SDK's standard chain.
@@ -87,9 +171,23 @@ export async function operatorCredentials() {
   // scope for the process lifetime, so without it a profile written *after* the
   // first credential read (e.g. just pasted in the form) is invisible until
   // restart ("Could not resolve credentials using profile: [agentspoppy]").
-  return agentspoppyProfileExists()
-    ? fromIni({ profile: AGENTSPOPPY_PROFILE, ignoreCache: true })
-    : fromNodeProviderChain();
+  if (!agentspoppyProfileExists()) return fromNodeProviderChain();
+  // Inline secret (legacy, non-macOS, or session creds): the SDK's own reader, as ever.
+  if (readProfileInlineSecret() !== null) return fromIni({ profile: AGENTSPOPPY_PROFILE, ignoreCache: true });
+  // Keychain custody: key id from the file, secret from the Keychain.
+  const keyId = readAgentsPoppyProfileKeyId();
+  const secret = keyId ? keychainRead(keyId) : null;
+  if (keyId && secret) {
+    return async () => ({ accessKeyId: keyId, secretAccessKey: secret });
+  }
+  // Marked for the Keychain but the item is gone. LOUD, specific, and never a silent
+  // fall-through to the chain — the chain could resolve a DIFFERENT identity.
+  return async () => {
+    throw new Error(
+      "AgentsPoppy's stored key points at the macOS Keychain, but the Keychain item is missing " +
+        "or unreadable. Reconnect your AWS key in Manage your AWS connection.",
+    );
+  };
 }
 
 /**
@@ -144,11 +242,18 @@ export function writeAgentsPoppyProfile(input: AwsKeyInput): void {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
 
   const existing = existsSync(p) ? readFileSync(p, "utf8") : "";
-  const lines = [
-    `aws_access_key_id = ${accessKeyId}`,
-    `aws_secret_access_key = ${secretAccessKey}`,
-    ...(sessionToken ? [`aws_session_token = ${sessionToken}`] : []),
-  ];
+  // Phase 2: a long-lived key on macOS goes STRAIGHT to the Keychain — no file secret is
+  // ever written. keychainStore verifies its own readback; on any failure the inline
+  // write happens exactly as before, because key entry must never brick. Session-token
+  // credentials stay inline (temporary — they expire on their own).
+  const toKeychain = !sessionToken && keychainStore(accessKeyId, secretAccessKey);
+  const lines = toKeychain
+    ? [`aws_access_key_id = ${accessKeyId}`, KEYCHAIN_MARKER]
+    : [
+        `aws_access_key_id = ${accessKeyId}`,
+        `aws_secret_access_key = ${secretAccessKey}`,
+        ...(sessionToken ? [`aws_session_token = ${sessionToken}`] : []),
+      ];
   writeFileSync(p, upsertIniSection(existing, AGENTSPOPPY_PROFILE, lines), { mode: 0o600 });
   enforceProfilePermissions();
 }
@@ -189,7 +294,10 @@ export function removeAgentsPoppyProfile(): boolean {
     if (!existsSync(p)) return false;
     const existing = readFileSync(p, "utf8");
     if (!/^\s*\[\s*agentspoppy\s*\]\s*$/m.test(existing)) return false;
+    // The Keychain item goes too — read the key id BEFORE the section is stripped.
+    const keyId = readAgentsPoppyProfileKeyId();
     writeFileSync(p, removeIniSection(existing, AGENTSPOPPY_PROFILE), { mode: 0o600 });
+    if (keyId) keychainRemove(keyId);
     return true;
   } catch {
     return false;
