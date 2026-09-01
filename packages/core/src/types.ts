@@ -77,6 +77,59 @@ export interface PermissionLimits {
   requireApprovalFor?: string[];
 }
 
+/**
+ * Where a poppy's CLOUD code connects (docs/specs/network-egress.md, phase 1).
+ *
+ * - "none"     — its deployed compute makes no internet connections at all
+ *                (the value phase 2 can enforce with a sealed VPC, at $0);
+ * - "aws-only" — it calls AWS services but no third-party endpoint;
+ * - "user-directed" — it reaches the internet only where the USER's requests direct
+ *   it (an agent browsing on the user's instruction); no fixed list exists to name,
+ *   which also means no gate can refuse for it — machine enforcement is log-only,
+ *   and the screen never shows this value as host-enforced;
+ * - string[]   — the third-party hosts it talks to, named.
+ *
+ * Phase 1 is a DECLARATION: the screen shows it as the developer's statement,
+ * never with an enforced tick. IAM controls which resources code may touch —
+ * it says nothing about where code sends data, and pretending otherwise is
+ * exactly the false green the presentation rules forbid.
+ */
+export type EgressDeclaration = "none" | "aws-only" | "user-directed" | string[];
+
+/**
+ * The SECOND egress door (the founder's distinction, 2026-09-01): not the poppy's own
+ * code, but the infrastructure it creates FOR THE USER, whose nature is to be on the
+ * internet — a VM exists to reach the network, a website to serve it, a mail system to
+ * exchange mail with it. Declared as a kind so the screen can say it in plain words,
+ * alongside the standing catalogue rule that a poppy must never route the user's cloud
+ * data or activity out through what it creates.
+ */
+export type InfrastructureEgress = "none" | "servers" | "websites" | "email";
+
+/** Network behaviour a poppy declares. Absent = undeclared (weighed, not punished). */
+export interface NetworkDeclaration {
+  /** Door 1 — where the poppy's OWN cloud code connects. */
+  egress: EgressDeclaration;
+  /** Door 2 — internet-facing infrastructure it creates for the user. Absent = none. */
+  infrastructure?: InfrastructureEgress;
+  /**
+   * Door 3 — where the poppy's own code ON THE USER'S MACHINE connects: its frontend
+   * tab and its confined backend. Same vocabulary as door 1, a DIFFERENT population of
+   * connections, and the only one the machine gate can actually refuse
+   * (docs/specs/machine-gate.md).
+   *
+   * It is a separate field because one value cannot describe both planes truthfully:
+   * MailPoppy's deployed Lambdas are AWS-only while its desktop half also calls its
+   * vendor Hub and the mail server the user names for an import. Collapsing the two
+   * would force a poppy to either understate its machine reach or overstate its cloud
+   * reach — and the screen shows each door with its own sentence, so neither is hidden.
+   *
+   * Absent = undeclared: the host OBSERVES and logs, never refuses (so no poppy written
+   * before this field breaks), and the screen may never graduate to "Host-enforced".
+   */
+  machine?: EgressDeclaration;
+}
+
 /** What an app is allowed to do — declared by the app, approved by the user. */
 export interface PermissionSet {
   id: string;
@@ -86,6 +139,8 @@ export interface PermissionSet {
   /** Tag keys every brokered resource must carry (enables attribution + teardown). */
   requiredTags: string[];
   limits: PermissionLimits | null;
+  /** Where this poppy's cloud code connects. Absent = undeclared. */
+  network?: NetworkDeclaration;
 }
 
 /** A connected app under a ConnectedAccount. */

@@ -21,6 +21,12 @@ describes the v1 architecture. It contains no app-specific logic by design.
   credential, and paid features fail closed with no network.
 - **Agnostic.** The broker knows nothing about any particular consumer app. Apps connect
   through a documented API.
+- **Declared network, gated on this machine.** A poppy declares where its code connects —
+  in the cloud (`network.egress`) and on the user's machine (`network.machine`). The
+  second is enforced here: the host arms a gate inside the confined backend before the
+  poppy's code loads and compiles the same declaration into the tab's
+  Content-Security-Policy, so an undeclared destination is refused and logged
+  (`docs/specs/machine-gate.md`). A poppy that declares nothing is observed, not blocked.
 - **Trust by auditability.** The code that holds credentials and enforces scope is
   source-available so the guarantees can be verified.
 

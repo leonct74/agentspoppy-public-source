@@ -592,6 +592,7 @@ export function App() {
             onOpenExtension={(extId) => setView({ type: "extension", id: extId })}
             blockedExtensionIds={extensions.filter((e) => e.backend === "blocked").map((e) => e.extensionId)}
             onUpdatePolicy={() => setView({ type: "connect", action: "update-policy" })}
+            machineGateFor={(connectionId) => extensions.find((e) => e.connectionId === connectionId)?.machineGate}
           />
         )}
 
@@ -694,6 +695,7 @@ function DetailContainer({
   onOpenExtension,
   blockedExtensionIds,
   onUpdatePolicy,
+  machineGateFor,
 }: {
   id: string;
   onBack: () => void;
@@ -706,6 +708,9 @@ function DetailContainer({
   blockedExtensionIds: string[];
   /** Route to the "update your access policy" panel — the fix when host cleanup is denied. */
   onUpdatePolicy: () => void;
+  /** The machine gate's state for a connection, from the live extension list — the only
+   *  source the card may graduate a declaration on (docs/specs/machine-gate.md). */
+  machineGateFor: (connectionId: string) => "enforced" | "observed" | "none" | undefined;
 }) {
   const [connection, setConnection] = useState<Connection | null>(null);
   const [inventory, setInventory] = useState<Inventory | null>(null);
@@ -934,6 +939,7 @@ function DetailContainer({
   return (
     <ConnectionDetailView
       connection={connection}
+      machineGate={machineGateFor(connection.id)}
       inventory={inventory}
       audit={audit}
       observed={observed}

@@ -60,6 +60,20 @@ Non-negotiable rules (from AGENTS.md):
     • never spawn a child process or a worker — pure Node in one process;
     • trap: under the permission model `fs.existsSync` on a DENIED path THROWS instead of
       returning false — wrap existence probes in try/catch (treat a throw as "not there").
+- DECLARE WHERE YOUR CODE CONNECTS, in `permissionSet.network`. Two fields, two different
+  places code runs:
+    • `"egress"` — where the code you DEPLOY connects (`"none"` / `"aws-only"` / named hosts).
+      Required to be listed if your grants can deploy cloud compute; shown to the user as your
+      own statement. Add `"infrastructure": "servers" | "websites" | "email"` if what you build
+      FOR the user is itself internet-facing.
+    • `"machine"` — where YOUR OWN frontend and backend connect on the user's machine, same
+      values. This one the host ENFORCES: it checks every connection your backend opens (before
+      your code loads) and every fetch your tab makes, and refuses anything you did not declare.
+      So declare it accurately and then click-test every screen — a forgotten host fails on the
+      user's machine, not in your dev loop. You never declare loopback, and you never declare
+      the AgentsPoppy API your Feedback tab calls from your own page. Omitting `"machine"` is
+      allowed (the host logs instead of refusing), but then your permission screen can never
+      say "Host-enforced".
 - Leave no trace: the user must be able to remove EVERYTHING you build, from AgentsPoppy, in one
   click. Put all your resources in ONE CloudFormation stack and tag them, so deleting the stack
   removes them. If you create anything outside a stack (DNS records, account-level identities), tag

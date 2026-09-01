@@ -216,3 +216,33 @@ describe("a grant's optional `reason` (docs/specs/permission-presentation.md)", 
     expect(r.errors.some((e) => e.includes("plain text"))).toBe(true);
   });
 });
+
+describe("network egress declaration (spec: network-egress.md phase 1)", () => {
+  it("accepts a valid declaration on the permission set", () => {
+    const m = validManifest();
+    m.permissionSet.network = { egress: "aws-only" };
+    expect(validateManifest(m)).toEqual({ ok: true, errors: [] });
+    m.permissionSet.network = { egress: ["api.stripe.com"] };
+    expect(validateManifest(m)).toEqual({ ok: true, errors: [] });
+  });
+
+  it("absence stays valid — undeclared is weighed on the screen, not rejected here", () => {
+    expect(validateManifest(validManifest()).ok).toBe(true);
+  });
+
+  it("rejects a typo'd value rather than letting it ship as 'declared'", () => {
+    const m = validManifest();
+    (m.permissionSet as { network?: unknown }).network = { egress: "no-internet" };
+    const r = validateManifest(m);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join(" ")).toContain('"none", "aws-only", "user-directed", or an array of hostnames');
+  });
+
+  it("rejects URLs and wildcards in the domain list", () => {
+    const m = validManifest();
+    m.permissionSet.network = { egress: ["https://api.stripe.com"] };
+    expect(validateManifest(m).ok).toBe(false);
+    m.permissionSet.network = { egress: ["*.stripe.com"] };
+    expect(validateManifest(m).ok).toBe(false);
+  });
+});

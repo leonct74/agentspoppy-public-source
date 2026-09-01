@@ -6,6 +6,7 @@ import type { ActivityEvent, AuditEntry, Connection, Finding as CoreFinding, Inf
 import {
   assessPermissionSet,
   brokerGuarantees,
+  enforcementCard,
   grantCannotBeNarrowed,
   serviceStake,
   summarizeObserved,
@@ -23,10 +24,25 @@ import { serviceColor, summarizeFootprint } from "../lib/infraLayout";
 import { StatusBadge } from "../components/StatusBadge";
 import { RiskBadge } from "../components/RiskBadge";
 import { Countdown } from "../components/Countdown";
-import { Icon } from "../components/Icon";
+import { Icon, type IconName } from "../components/Icon";
+
+// The enforcement card's icons, keyed by row id — fixed like everything else about the
+// card: the same icon means the same thing on every poppy.
+const CARD_ICONS: Record<ReturnType<typeof enforcementCard>[number]["id"], IconName> = {
+  keys: "key",
+  reach: "cloud",
+  egress: "external",
+  approval: "check",
+  exit: "power",
+  record: "activity",
+  limits: "ban",
+};
 import { formatDateTime } from "../lib/format";
 
 export interface ConnectionDetailViewProps {
+  /** The machine gate's live state for this connection, reported by the running host —
+   *  the ONLY thing that graduates the card's "Data exits" chip to Host-enforced. */
+  machineGate?: "enforced" | "observed" | "none";
   connection: Connection;
   inventory: Inventory;
   audit: AuditEntry[];
@@ -696,9 +712,46 @@ export function ConnectionDetailView(props: ConnectionDetailViewProps) {
 
       <h3>What AgentsPoppy enforces</h3>
       <p className="muted section-note">
-        The floor under everything below — enforced by the platform whatever {c.app.name} asks
-        for. Each line says where it is pinned, because a guarantee you cannot check is just a
-        claim. Three of them depend on this poppy and say so when they do not apply.
+        The same card, in the same order, for every poppy — so you can compare two at a glance.
+        The full technical assessment is under Advanced, below.
+      </p>
+      <div className="enforce-card">
+        {enforcementCard(c.permissionSet, {
+          supervised: c.supervised ?? false,
+          machineGateArmed: props.machineGate === "enforced",
+        }).map((r) => (
+          <div key={r.id} className={`ec-row ec--${r.state}`}>
+            <span className="ec-icon" aria-hidden="true">
+              <Icon name={CARD_ICONS[r.id]} />
+            </span>
+            <div className="ec-body">
+              <div className="ec-head">
+                <span className="ec-label">{r.label}</span>
+                <span className="ec-chip">{r.stateWord}</span>
+              </div>
+              <p className="ec-sentence">{r.sentence}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Everything below the card is the ADVANCED view (founder, 2026-09-01): the full
+          register — pinned guarantees, the map, every grant, the weigh panel, the observed
+          record — for people who assess a poppy in depth. Collapsed by default; the card
+          above must stand on its own. */}
+      <details className="advanced-view">
+        <summary>
+          <span className="adv-title">Advanced — assess this poppy in detail</span>
+          <span className="adv-sub muted">
+            every permission, the developer’s words, what it actually did
+          </span>
+        </summary>
+
+      <h3>The enforcement floor, pinned</h3>
+      <p className="muted section-note">
+        Each line of the card above, with where it is enforced — because a guarantee you cannot
+        check is just a claim. Three of them depend on this poppy and say so when they do not
+        apply.
       </p>
       <ul className="guarantee-list">
         {brokerGuarantees(c.permissionSet, { supervised: c.supervised ?? false }).map((g) => (
@@ -1003,7 +1056,7 @@ export function ConnectionDetailView(props: ConnectionDetailViewProps) {
         ))}
       </ul>
 
-
+      </details>
     </section>
   );
 }

@@ -15,6 +15,7 @@
  * broker's risk model (packages/core) judges the permission set separately.
  */
 import type { PermissionGrant, PermissionSet } from "@agentspoppy/core";
+import { validateNetworkDeclaration } from "@agentspoppy/core";
 import { type Capability, isCapability } from "./capabilities";
 
 /** The frontend the host renders in a sandboxed webview tab. */
@@ -260,6 +261,11 @@ function validatePermissionSet(ps: unknown, errors: string[]): void {
   if (typeof p.id !== "string" || p.id.trim() === "") errors.push("permissionSet.id is required");
   if (typeof p.name !== "string" || p.name.trim() === "") errors.push("permissionSet.name is required");
   if (!Array.isArray(p.requiredTags)) errors.push("permissionSet.requiredTags must be an array");
+  // Optional network-egress declaration (docs/specs/network-egress.md phase 1) —
+  // structurally checked when present so a typo'd value can't ship as "declared".
+  if (p.network !== undefined) {
+    errors.push(...validateNetworkDeclaration(p.network).map((e) => `permissionSet.${e}`));
+  }
   if (!Array.isArray(p.grants) || p.grants.length === 0) {
     errors.push("permissionSet.grants must be a non-empty array");
     return;

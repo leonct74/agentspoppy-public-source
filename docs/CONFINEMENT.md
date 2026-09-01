@@ -35,6 +35,23 @@ threads, native addons and WASI are denied by the same flag.
 Strict requires `runtime: "node22"`. A native executable has no runtime of ours inside it to enforce
 an allowlist, so the validator rejects that combination rather than pretending it is confined.
 
+## The network half (the machine gate, since 0.3.14)
+
+Node's permission model covers files, not sockets — for a long time the honest sentence was "a
+confined poppy still has the network". It has one now: if the manifest declares
+`permissionSet.network.machine`, the host arms a gate inside the backend child before the poppy
+bundle loads, and every socket connect and DNS query is checked against that declaration
+(`docs/specs/machine-gate.md`). Undeclared destinations are refused with `APP_NET_GATE_REFUSED` and
+logged; loopback is always allowed; the poppy's tab gets the matching Content-Security-Policy.
+
+The gate depends on the confinement above rather than standing on its own: **no child processes, no
+native addons, no worker threads** are exactly the three ways around a patch applied inside the
+runtime. That is also why it is *host*-enforced and never described as something the poppy "cannot"
+do — the sealed-VPC phase is the only place that word is earned.
+
+A poppy that declares nothing is **observed**: allowed, and each external destination logged once
+onto its record. Nothing written before this field breaks.
+
 ## The one exception
 
 A named, one-release data migration. A poppy that kept state in the user's home before confinement

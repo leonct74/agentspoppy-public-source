@@ -108,3 +108,78 @@ describe("buildFindings — grouped by meaning, worst first", () => {
     expect(serviceNoun("workspaces")).toBe("WORKSPACES resources");
   });
 });
+
+describe("buildFindings — network egress (spec: network-egress.md phase 1)", () => {
+  const compute = { service: "cloudformation", actions: ["CreateStack"], resourceScope: TAGGED_AS_SELF };
+
+  it("states the standing fact once for an undeclared poppy that deploys compute", () => {
+    const f = buildFindings(ps([compute]));
+    const row = f.find((x) => x.id === "egress-undeclared");
+    expect(row).toBeDefined();
+    expect(row!.triage).toBe("know");
+    expect(row!.title).toBe("Its cloud code can reach the internet");
+    expect(row!.context).toContain("does not say where its cloud code connects");
+    // The listing rule is real (agentspoppy-web mechanical-review refuses undeclared
+    // egress), so the screen may state it — and must, or the fact reads as unpoliced.
+    expect(row!.context).toContain("can no longer enter or update in the AgentsPoppy catalogue");
+  });
+
+  it("says nothing at all for a poppy with no cloud compute — no fact, no copy", () => {
+    const f = buildFindings(ps([{ service: "s3", actions: ["PutObject"], resourceScope: `arn:${TAGGED_AS_SELF}` }]));
+    expect(f.find((x) => x.id.startsWith("egress"))).toBeUndefined();
+  });
+
+  it("shows a declaration in the developer's voice, never as an enforced fact", () => {
+    const f = buildFindings({ ...ps([compute]), network: { egress: "aws-only" as const } });
+    const row = f.find((x) => x.id === "egress-declared");
+    expect(row).toBeDefined();
+    expect(row!.title).toBe("Declares its cloud code connects only to AWS");
+    expect(row!.context).toContain("developer's statement");
+    expect(f.find((x) => x.id === "egress-undeclared")).toBeUndefined();
+  });
+
+  it("a declared domain list names the domains in the scope line", () => {
+    const f = buildFindings({ ...ps([compute]), network: { egress: ["api.stripe.com"] } });
+    const row = f.find((x) => x.id === "egress-declared")!;
+    expect(row.scopeLine).toContain("api.stripe.com");
+    expect(row.title).toContain("api.stripe.com");
+  });
+});
+
+describe("buildFindings — infrastructure egress (door 2)", () => {
+  const compute = { service: "ec2", actions: ["RunInstances"], resourceScope: TAGGED_AS_SELF };
+
+  it("a declared infrastructure kind gets its own purpose row beside the code row", () => {
+    const f = buildFindings({ ...ps([compute]), network: { egress: "none" as const, infrastructure: "servers" as const } });
+    const infra = f.find((x) => x.id === "egress-infrastructure");
+    expect(infra).toBeDefined();
+    expect(infra!.title).toBe("The servers it creates for you can reach the internet");
+    expect(infra!.context).toContain("Catalogue rules forbid");
+    expect(f.find((x) => x.id === "egress-declared")).toBeDefined();
+  });
+
+  it("no infrastructure row when the kind is none or absent", () => {
+    const none = buildFindings({ ...ps([compute]), network: { egress: "none" as const, infrastructure: "none" as const } });
+    expect(none.find((x) => x.id === "egress-infrastructure")).toBeUndefined();
+    const absent = buildFindings({ ...ps([compute]), network: { egress: "none" as const } });
+    expect(absent.find((x) => x.id === "egress-infrastructure")).toBeUndefined();
+  });
+});
+
+describe("buildFindings — machine egress (door 3)", () => {
+  const compute = { service: "lambda", actions: ["CreateFunction"], resourceScope: TAGGED_AS_SELF };
+
+  it("a declared machine plane gets its own row, beside the cloud one", () => {
+    const f = buildFindings({ ...ps([compute]), network: { egress: "aws-only" as const, machine: ["agentspoppy.com"] } });
+    const row = f.find((x) => x.id === "egress-machine");
+    expect(row).toBeDefined();
+    expect(row!.title).toContain("from your machine");
+    expect(row!.scopeLine).toContain("agentspoppy.com");
+    expect(f.find((x) => x.id === "egress-declared")).toBeDefined();
+  });
+
+  it("no row when the poppy says nothing about this machine — silence, not an accusation", () => {
+    const f = buildFindings({ ...ps([compute]), network: { egress: "aws-only" as const } });
+    expect(f.find((x) => x.id === "egress-machine")).toBeUndefined();
+  });
+});

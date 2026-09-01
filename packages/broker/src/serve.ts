@@ -26,7 +26,7 @@ import type { AwsBootstrap, DeletionReport } from "./aws";
 import { listen } from "./http";
 import { generateToken, HOST_TOKEN_STDOUT_PREFIX } from "./auth";
 import { watchParent } from "./parent-watch";
-import { DirectoryService, ExtensionRegistry, killAllBackends, poppyBackendEntry, reapOrphanSidecars } from "./extensions";
+import { armNetGate, DirectoryService, ExtensionRegistry, killAllBackends, NET_GATE_ENV, poppyBackendEntry, realGateTargets, reapOrphanSidecars } from "./extensions";
 import { parseManifest } from "@agentspoppy/extension-sdk";
 
 const PORT = Number(process.env.AGENTSPOPPY_PORT ?? 8799);
@@ -382,10 +382,28 @@ async function main(): Promise<void> {
 // run a `"runtime": "node22"` poppy's CJS bundle — the poppy ships no runtime of its own.
 const poppyEntry = poppyBackendEntry(process.argv);
 if (poppyEntry) {
-  // createRequire, not import(): a SEA main can only load external files through it.
-  // Any throw (missing file, bundle syntax error) crashes this child with a real
-  // stack on stderr — the host's readiness probe then reports the exit cleanly.
-  createRequire(poppyEntry)(poppyEntry);
+  // The machine gate (docs/specs/machine-gate.md) arms BEFORE the poppy bundle loads —
+  // this child is our code first. Fail CLOSED: a gate that cannot arm means the backend
+  // does not start; a security layer that silently degrades to open is the boundary
+  // fail-open bug again.
+  const gateConfig = process.env[NET_GATE_ENV];
+  const loadPoppy = () => {
+    // createRequire, not import(): a SEA main can only load external files through it.
+    // Any throw (missing file, bundle syntax error) crashes this child with a real
+    // stack on stderr — the host's readiness probe then reports the exit cleanly.
+    createRequire(poppyEntry)(poppyEntry);
+  };
+  if (gateConfig) {
+    // The try covers ARMING only — a throw out of loadPoppy itself must keep crashing
+    // with the poppy's real stack, not be relabelled as a gate failure.
+    try {
+      armNetGate(gateConfig, realGateTargets());
+    } catch (err) {
+      console.error(`net-gate: failed to arm — refusing to start the backend: ${(err as Error).message}`);
+      process.exit(1);
+    }
+  }
+  loadPoppy();
 } else {
   serveBroker();
 }

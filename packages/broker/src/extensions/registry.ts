@@ -17,6 +17,7 @@
  * Pure of any spawn/IO: it composes the existing {@link BrokerService} only. Backend
  * process lifecycle is a separate seam (a later phase) so this stays unit-testable.
  */
+import { hostArmsBackendGate, machineGateStateFor, parseGateLogLine } from "./net-gate";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { basename, dirname, join, resolve, sep } from "node:path";
@@ -66,6 +67,15 @@ export interface ExtensionRuntimeState {
   frontendUrl?: string;
   /** Loopback URL of the poppy's app icon (when its manifest declares one that exists). */
   iconUrl?: string;
+  /**
+   * The machine gate's state for this poppy on THIS host (docs/specs/machine-gate.md):
+   * "enforced" — network declared and every half that applies here is gated (CSP on the
+   * tab; the backend, if any, spawns with the enforce config); "observed" — undeclared,
+   * connections logged not blocked; "none" — the gate cannot hold (native/unconfined
+   * backend). The screen may graduate a declaration to "Host-enforced" ONLY from this
+   * report — never from the manifest alone.
+   */
+  machineGate: "enforced" | "observed" | "none";
 }
 
 /** Minimal content-type map for the static frontend assets the host serves. */
@@ -246,6 +256,7 @@ export class ExtensionRegistry {
       capabilities: inst.manifest.capabilities,
       frontendUrl: this.frontendUrlFor(inst.manifest, inst.root),
       iconUrl: this.iconUrlFor(inst.manifest, inst.root),
+      machineGate: machineGateStateFor(inst.manifest, { backendGateAvailable: await hostArmsBackendGate() }),
     };
     // Rung-1 blocklist: a blocked poppy never spawns its backend, whatever its
     // connection state. (A running one was already killed when it was blocked.)
@@ -267,7 +278,25 @@ export class ExtensionRegistry {
       this.backendTokens.set(bootstrap.credentialsToken, conn.id);
       this.tokenByExtension.set(extensionId, bootstrap.credentialsToken);
     }
-    const proc = await this.backendHost.start({ manifest: inst.manifest, root: inst.root, bootstrap });
+    // The gate's refusal/observation log becomes part of this connection's record
+    // (machine-gate.md decision 3). Capped per process run: the gate logs once per
+    // host, but the line arrives over poppy-adjacent stderr, so a forger only ever
+    // floods its own record up to the cap.
+    let gateEvents = 0;
+    const proc = await this.backendHost.start({
+      manifest: inst.manifest,
+      root: inst.root,
+      bootstrap,
+      onGateLine: (line) => {
+        if (gateEvents >= 50) return;
+        const e = parseGateLogLine(line);
+        if (!e) return;
+        gateEvents++;
+        void this.service
+          .recordNetGateEvent(conn.id, e.kind, `${e.via} to ${e.host}${e.kind === "refused" ? " — not in its declared egress" : ""}`)
+          .catch(() => {});
+      },
+    });
     this.running.set(extensionId, proc);
     return { ...base, backend: "running", port: proc.port };
   }
@@ -432,6 +461,7 @@ export class ExtensionRegistry {
   async list(): Promise<ExtensionRuntimeState[]> {
     const conns = await this.service.listConnections();
     const blocked = new Set(await this.service.listBlockedExtensions());
+    const backendGateAvailable = await hostArmsBackendGate();
     return [...this.installed.values()].map((inst) => {
       // Prefer a LIVE connection; fall back to a revoked one only when that's all there is,
       // so a revoked-but-still-installed poppy reads as "revoked" instead of masquerading as
@@ -462,6 +492,7 @@ export class ExtensionRegistry {
         capabilities: inst.manifest.capabilities,
         frontendUrl: this.frontendUrlFor(inst.manifest, inst.root),
         iconUrl: this.iconUrlFor(inst.manifest, inst.root),
+        machineGate: machineGateStateFor(inst.manifest, { backendGateAvailable }),
       };
     });
   }

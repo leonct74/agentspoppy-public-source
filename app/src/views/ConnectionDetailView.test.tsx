@@ -146,8 +146,10 @@ describe("ConnectionDetailView — policy risk", () => {
       { supervised: true },
     );
     expect(screen.getByText("Can change and delete roles and permissions you did not create")).toBeTruthy();
-    // The gated finding carries the reassurance pill...
-    const pill = screen.getByText("Supervised");
+    // The gated finding carries the reassurance pill... — asserted on the finding's own
+    // pill element: the enforcement card's approval chip also reads "Supervised".
+    const pill = [...document.querySelectorAll("details.finding [title]")].find((el) => /Supervised/.test(el.textContent ?? "")) as HTMLElement;
+    expect(pill).toBeTruthy();
     expect(pill.getAttribute("title")).toMatch(/approval/i);
   });
 
@@ -674,7 +676,8 @@ describe("the boundary / consequence standard (docs/specs/permission-presentatio
     // Supervision is hasUnscopedGrants, so a scoped grant is never the reason — and the
     // Supervised pill's tooltip claims the capability "reaches beyond its own resources".
     renderDetail(confinedIam, { supervised: true });
-    expect(screen.queryByText(/^Supervised$/)).toBeNull();
+    const findingPill = [...document.querySelectorAll("details.finding [title]")].find((el) => /Supervised/.test(el.textContent ?? ""));
+    expect(findingPill ?? null).toBeNull();
   });
 
   it("still marks a genuinely unscoped grant as reaching beyond, and supervises on it", () => {
@@ -743,7 +746,8 @@ describe("Panel 1 — what AgentsPoppy enforces (docs/specs/permission-presentat
   it("shows the enforced floor, each line pinned to where it is enforced", () => {
     renderDetail(tagScoped, { supervised: true });
     expect(screen.getByText(/What AgentsPoppy enforces/i)).toBeTruthy();
-    expect(screen.getByText(/temporary session/i)).toBeTruthy();
+    const floor = document.querySelector(".guarantee-list")!;
+    expect(floor.textContent).toMatch(/temporary session/i);
     // the pins render — a guarantee nobody can check is just a claim
     expect(document.querySelectorAll(".g-pin").length).toBeGreaterThan(5);
   });
@@ -761,9 +765,22 @@ describe("Panel 1 — what AgentsPoppy enforces (docs/specs/permission-presentat
     expect(screen.getByText(/naming its resources/i)).toBeTruthy();
   });
 
+  it("the basic card: seven fixed rows, same order for every poppy; the advanced view starts closed", () => {
+    renderDetail(tagScoped, { supervised: true });
+    const rows = [...document.querySelectorAll(".enforce-card .ec-row")];
+    expect(rows).toHaveLength(7);
+    const labels = rows.map((r) => r.querySelector(".ec-label")?.textContent);
+    expect(labels).toEqual(["Your keys", "Your cloud", "Data exits", "Your approval", "Your exit", "The record", "Hard limits"]);
+    const adv = document.querySelector("details.advanced-view") as HTMLDetailsElement;
+    expect(adv).toBeTruthy();
+    expect(adv.open).toBe(false);
+  });
+
   it("reflects the LIVE supervision state, not the default", () => {
     renderDetail(tagScoped, { supervised: false });
-    expect(screen.getByText(/switched off for this connection/i)).toBeTruthy();
+    expect(document.querySelector(".guarantee-list")!.textContent).toMatch(/switched off for this connection/i);
+    // and the basic card mirrors it
+    expect(document.querySelector(".ec--off")).toBeTruthy();
   });
 });
 

@@ -7,3 +7,5 @@ export * from "./backend-host";
 export * from "./directory";
 export * from "./zip";
 export * from "./reap-orphans";
+export * from "./net-gate";
+export * from "./frontend-csp";

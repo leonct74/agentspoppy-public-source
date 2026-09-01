@@ -20,6 +20,7 @@ import { realpathSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { effectiveIsolation, effectiveRuntime, type BackendBootstrap, type ExtensionManifest } from "@agentspoppy/extension-sdk";
+import { gateEnvFor, NET_GATE_ENV } from "./net-gate";
 
 /** Everything the host needs to launch one backend. */
 export interface BackendStartSpec {
@@ -27,6 +28,13 @@ export interface BackendStartSpec {
   /** Absolute path to the extension's installed root (where `manifest.backend.entry` lives). */
   root: string;
   bootstrap: BackendBootstrap;
+  /**
+   * Called for every `net-gate:` line the child writes to stderr (the gate's refusal
+   * and observation log — docs/specs/machine-gate.md decision 3). When present, the
+   * child's stderr is piped THROUGH the broker (and still forwarded to the broker's
+   * own stderr, so nothing disappears from the logs).
+   */
+  onGateLine?: (line: string) => void;
 }
 
 /** A running (or stopped) backend process. */
@@ -331,15 +339,42 @@ export class NodeBackendHost implements BackendHost {
       );
     }
 
+    // The machine gate (docs/specs/machine-gate.md): declared network → enforce;
+    // undeclared → observe-and-log. Null for native or unconfined backends — the gate
+    // cannot hold there and must not pretend to. The gate arms in serve.ts's
+    // --poppy-backend branch, which only the PACKAGED (SEA) host routes through — a
+    // dev-path spawn runs the bundle directly and is therefore ungated. Users only
+    // ever run the packaged host; say it out loud for the developer who doesn't.
+    const gateEnv = gateEnvFor(spec.manifest);
+    if (gateEnv && runtime !== "native" && executable === process.execPath && args[0] !== "--poppy-backend") {
+      console.warn(`net-gate: ${spec.manifest.id} spawned via the dev path — the network gate arms only in the packaged host`);
+    }
     const child = spawn(executable, args, {
       cwd,
       env: {
         ...poppyEnv(process.env),
         AGENTSPOPPY_BOOTSTRAP: JSON.stringify(spec.bootstrap),
         ...(confinement ? { NODE_OPTIONS: confinement } : {}),
+        ...(gateEnv ? { [NET_GATE_ENV]: gateEnv } : {}),
       },
-      stdio: "inherit",
+      // stderr is piped when the caller wants gate lines — forwarded verbatim to our
+      // own stderr either way, so capturing never hides a crash stack from the logs.
+      stdio: spec.onGateLine ? ["inherit", "inherit", "pipe"] : "inherit",
     });
+    if (spec.onGateLine && child.stderr) {
+      const onGateLine = spec.onGateLine;
+      let buf = "";
+      child.stderr.on("data", (chunk: Buffer) => {
+        process.stderr.write(chunk);
+        buf += chunk.toString("utf8");
+        let nl;
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, nl);
+          buf = buf.slice(nl + 1);
+          if (line.startsWith("net-gate: ")) onGateLine(line);
+        }
+      });
+    }
 
     let running = true;
     liveChildren.add(child);

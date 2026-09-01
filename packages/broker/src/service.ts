@@ -958,6 +958,16 @@ export class BrokerService {
     return updated;
   }
 
+  /**
+   * Record a machine-gate network event on a connection's trail (machine-gate.md
+   * decision 3): what the poppy's backend TRIED on this machine. Kinds map to audit
+   * types "network-refused" / "network-observed". Rendered as fact, never alarm —
+   * most observations are a stray telemetry SDK, not an attack.
+   */
+  async recordNetGateEvent(connectionId: string, kind: "refused" | "observed", detail: string): Promise<void> {
+    await this.audit(connectionId, `network-${kind}`, detail);
+  }
+
   private async audit(connectionId: string, type: string, detail?: string): Promise<void> {
     const entry: AuditEntry = { ts: this.now(), type, detail };
     await this.store.appendAudit(connectionId, entry);

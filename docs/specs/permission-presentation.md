@@ -66,7 +66,17 @@ poppy asking for more than it needs is a poppy problem, not a rating problem.
    created role can ever hold, which is precisely the consequence rule 1 describes — so once
    fault-A step 3 enforces it, the IAM stake can honestly fall. It drops on what the platform
    enforces, never on what a manifest claims. (Rule B, approved; needs step 3.)
-6. **Honest, never alarming** (founder, 2026-09-01: *"the purpose to honestly inform the user
+6. **A row graduates only on the plane its mechanism covers** (added 2026-09-01 with the
+   machine gate). The basic card's "Data exits" row states up to three declarations — the
+   poppy's cloud code, the infrastructure it builds for the user, and its own code on this
+   machine — and only the last of those is something the host can refuse. So the
+   "Host-enforced" chip is keyed to `network.machine` **and** to the running host reporting
+   the gate armed for that connection; the sentence it adds says *from this machine*, so the
+   tick cannot be read onto the cloud sentence beside it. A declaration about code we never
+   see may never wear a chip earned by code we do. Pinned by tests in both directions: a
+   manifest alone never graduates, and a cloud-only declaration never graduates however armed
+   the host says it is.
+7. **Honest, never alarming** (founder, 2026-09-01: *"the purpose to honestly inform the user
    should not translate into over-concerning or scaring the user"*). Honesty is the facts;
    fear is a tone, and the tone carries no information. In practice:
    - **Say each fact once.** The ceiling is stated on the boundary card and in the stake

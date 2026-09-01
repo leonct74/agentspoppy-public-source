@@ -24,6 +24,14 @@ import {
   scopeIsUnbounded,
 } from "./permissions";
 import { awsCannotNarrowAction, grantCannotBeNarrowed, narrowableActions } from "./awsNarrowing";
+import {
+  canDeployCloudCompute,
+  declaredEgressTitle,
+  declaredMachineTitle,
+  INFRASTRUCTURE_CONTEXT,
+  infrastructureTitle,
+  MACHINE_EGRESS_CONTEXT,
+} from "./network";
 import { serviceStake } from "./serviceStakes";
 import type { PermissionGrant, PermissionSet } from "./types";
 
@@ -226,6 +234,74 @@ export function buildFindings(ps: PermissionSet): Finding[] {
       context: `${confined.length} permission${confined.length === 1 ? "" : "s"} across ${services.length} service${services.length === 1 ? "" : "s"}, each limited to resources carrying this poppy's name or label.`,
       scopeLine: confined.map((g) => g.resourceScope).filter((v, i, a) => a.indexOf(v) === i).slice(0, 4).join(" · "),
       actions: confined.reduce((acc, g) => mergeBuckets(acc, bucketActions(g.service, g.actions)), bucketActions("", [])),
+      gated: false,
+    });
+  }
+
+  // Network egress (docs/specs/network-egress.md, phase 1). IAM confines which AWS
+  // resources code may touch — it says nothing about where deployed code SENDS data.
+  // A declaration is shown in the developer's voice ("declares"), never with a tick;
+  // an undeclared poppy that can put code in the cloud gets the standing fact, stated
+  // once, without alarm. A poppy with no cloud compute gets no network line at all.
+  if (ps.network) {
+    const egress = ps.network.egress;
+    out.push({
+      id: "egress-declared",
+      triage: "know",
+      title: declaredEgressTitle(egress),
+      services: [],
+      context:
+        "Where its cloud code connects is the developer's statement rather than something AWS enforces. AWS does not restrict where code deployed in your account sends data.",
+      scopeLine: Array.isArray(egress)
+        ? `manifest declares egress to ${egress.length} named domain${egress.length === 1 ? "" : "s"}: ${egress.join(", ")}`
+        : `manifest declares egress: ${egress}`,
+      actions: bucketActions("", []),
+      gated: false,
+    });
+    // Door 3 — the poppy's own code on THIS machine (docs/specs/machine-gate.md). Shown
+    // only when declared: unlike door 1 there is no listing rule yet, and an "undeclared"
+    // row on every poppy would be noise about a state the host handles by observing.
+    const machine = ps.network.machine;
+    if (machine !== undefined) {
+      out.push({
+        id: "egress-machine",
+        triage: "know",
+        title: declaredMachineTitle(machine),
+        services: [],
+        context: MACHINE_EGRESS_CONTEXT,
+        scopeLine: Array.isArray(machine)
+          ? `manifest declares machine egress to ${machine.length} named domain${machine.length === 1 ? "" : "s"}: ${machine.join(", ")}`
+          : `manifest declares machine egress: ${machine}`,
+        actions: bucketActions("", []),
+        gated: false,
+      });
+    }
+    // Door 2 — infrastructure the poppy creates FOR the user, whose nature is to be on
+    // the internet. Stated as purpose, never as a leak, with the standing catalogue rule.
+    const infraTitle = infrastructureTitle(ps.network.infrastructure);
+    if (infraTitle) {
+      out.push({
+        id: "egress-infrastructure",
+        triage: "know",
+        title: infraTitle,
+        services: [],
+        context: INFRASTRUCTURE_CONTEXT,
+        scopeLine: `manifest declares infrastructure: ${ps.network.infrastructure}`,
+        actions: bucketActions("", []),
+        gated: false,
+      });
+    }
+  } else if (canDeployCloudCompute(ps)) {
+    out.push({
+      id: "egress-undeclared",
+      triage: "know",
+      title: "Its cloud code can reach the internet",
+      services: [],
+      context:
+        "AWS does not restrict where code deployed in your account sends data, and this poppy does not say where its cloud code connects. " +
+        "A poppy can no longer enter or update in the AgentsPoppy catalogue without declaring this.",
+      scopeLine: "manifest declares no network egress",
+      actions: bucketActions("", []),
       gated: false,
     });
   }

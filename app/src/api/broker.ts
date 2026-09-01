@@ -26,6 +26,8 @@ export interface ExtensionRuntimeState {
   capabilities: Capability[];
   /** Loopback URL the broker serves this extension's installed frontend from (when present). */
   frontendUrl?: string;
+  /** The machine gate's state for this poppy on this host — see broker registry. */
+  machineGate?: "enforced" | "observed" | "none";
   /** Loopback URL of the poppy's app icon (when its manifest declares one that exists). */
   iconUrl?: string;
 }

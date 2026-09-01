@@ -16,6 +16,7 @@ import type { AddressInfo } from "node:net";
 import type { AppIdentity, PermissionSet } from "@agentspoppy/core";
 import { BrokerError, BrokerService } from "./service";
 import type { DirectoryService, ExtensionRegistry } from "./extensions";
+import { frontendCsp } from "./extensions";
 import { type AuthConfig, bearerToken, resolveCaller } from "./auth";
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
@@ -489,7 +490,14 @@ export async function handle(
       const rel = parts.slice(2).map(decodeURIComponent).join("/") || "index.html";
       const asset = await registry.readFrontendAsset(id, rel);
       if (!asset) return send(res, 404, { error: "not_found", message: `no frontend asset "${rel}" for ${id}` });
-      res.writeHead(200, { "content-type": asset.contentType });
+      // The machine gate's frontend half (docs/specs/machine-gate.md): a declared
+      // manifest's network egress, compiled to a CSP the webview engine enforces.
+      // Null for undeclared manifests — observe mode never breaks an older poppy.
+      const csp = frontendCsp(registry.get(id)?.manifest.permissionSet?.network);
+      res.writeHead(200, {
+        "content-type": asset.contentType,
+        ...(csp ? { "content-security-policy": csp } : {}),
+      });
       res.end(asset.bytes);
       return;
     }

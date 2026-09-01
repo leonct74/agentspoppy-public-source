@@ -51,7 +51,10 @@ The bar is the [AGENTS.md](../AGENTS.md) §10 checklist — all of it. Release-s
    It writes a deterministic STORE (uncompressed) zip — the sha256 *is* the trust story — and
    prints the catalog entry to submit. A compressed zip is rejected by the installer.
 5. **Click-test the packed build in the real host** (install-dev + full app restart). Reading
-   the code is not the test.
+   the code is not the test. **If you declared `network.machine`, this is where you find out
+   whether you declared it correctly** — the host refuses undeclared connections on the real
+   spawn path, and a missing host shows up as a failed call in your poppy, not as a warning
+   at pack time. Exercise every screen that talks to anything.
 6. **Submit through the developer portal** for review. Curated first-party poppies are
    maintained separately by the AgentsPoppy team.
 
@@ -107,6 +110,12 @@ The whole flow, in order. Steps 1–5 happen in your repo; 6–8 are the publish
   every user as a diff at update time and re-consent is demanded — a "bug fix" that quietly
   adds grants reads as exactly what it looks like. Declare only what the new code calls, and
   say so in the release notes.
+- **A new endpoint is a manifest change.** If the update makes your code talk to somewhere it
+  did not before — your own API, a third party, a new AWS service — update `network.machine`
+  (and `network.egress` if it is the deployed code) in the same release. On the machine plane
+  the host *refuses* what you did not declare, so a forgotten host is a broken feature for
+  every user who updates; on the cloud plane it is a false statement on their permission
+  screen. Adding a host is a declaration change users see and re-approve — that is the point.
 - **`minHost` honestly.** If the update needs a newer host (e.g. a shared runtime), set it —
   users on older hosts are then *not shown* the update, which beats offering them a button
   that can only fail.

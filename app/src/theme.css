@@ -1396,3 +1396,30 @@ button.os-card--add:hover .os-add-label { color: var(--clay); }
 
 /* The one-time key-custody notice — reassuring, not alarming (rule 6). */
 .custody-notice { border-color: color-mix(in srgb, var(--ok) 45%, transparent); background: color-mix(in srgb, var(--ok) 8%, var(--surface-1)); }
+
+/* ── The enforcement card (basic view) — nutrition-label style: fixed rows, fixed order ── */
+.enforce-card { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 10px 0 18px; }
+@media (max-width: 720px) { .enforce-card { grid-template-columns: 1fr; } }
+.ec-row { display: flex; gap: 11px; align-items: flex-start; background: var(--surface-1); border: 1px solid var(--border); border-radius: 6px; padding: 11px 13px; }
+.ec-icon { flex: none; width: 30px; height: 30px; border-radius: 6px; display: flex; align-items: center; justify-content: center; background: var(--surface-2); color: var(--muted-2); }
+.ec-icon svg { width: 17px; height: 17px; }
+.ec--enforced .ec-icon { color: var(--ok); }
+.ec--partial .ec-icon, .ec--off .ec-icon { color: var(--warn); }
+.ec--undeclared .ec-icon { color: var(--warn); }
+.ec-body { min-width: 0; }
+.ec-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.ec-label { font-weight: 600; font-size: 13px; letter-spacing: 0.01em; }
+.ec-chip { font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border-strong); color: var(--muted-2); white-space: nowrap; }
+.ec--enforced .ec-chip { border-color: color-mix(in srgb, var(--ok) 45%, var(--border-strong)); color: var(--ok); }
+.ec--partial .ec-chip, .ec--off .ec-chip, .ec--undeclared .ec-chip { border-color: color-mix(in srgb, var(--warn) 45%, var(--border-strong)); color: var(--warn); }
+.ec-sentence { margin: 5px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--muted-2); }
+
+/* ── The advanced view — everything technical, collapsed by default ── */
+details.advanced-view { margin-top: 6px; border-top: 1px solid var(--border); }
+details.advanced-view > summary { list-style: none; cursor: pointer; padding: 13px 2px; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+details.advanced-view > summary::-webkit-details-marker { display: none; }
+details.advanced-view > summary:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; border-radius: 4px; }
+details.advanced-view > summary .adv-title { font-weight: 600; font-size: 14px; }
+details.advanced-view > summary .adv-title::before { content: "▸ "; color: var(--muted); }
+details.advanced-view[open] > summary .adv-title::before { content: "▾ "; }
+details.advanced-view > summary .adv-sub { font-size: 12px; }

@@ -18,10 +18,15 @@
         "actions": [
           "GetCallerIdentity"
         ],
-        "resourceScope": "*"
+        "resourceScope": "*",
+        "reason": "Reads which AWS account and identity it is running as, so it can show you the account it is connected to. AWS publishes no resource type for this call, so it cannot be narrowed."
       }
     ],
-    "limits": null
+    "limits": null,
+    "network": {
+      "egress": "none",
+      "machine": "aws-only"
+    }
   },
   "frontend": {
     "entry": "frontend/index.html"

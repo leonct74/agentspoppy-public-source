@@ -262,6 +262,92 @@ platform patches touching its enforcement points are checked against that docume
   screen shows as *what this poppy is for*, next to the permissions it explains. Say what you build
   and where you put it. HostingPoppy's is the reference; AffiliatePoppy's is close behind.
 
+- **Declare where your cloud code connects** (`permissionSet.network.egress`, spec:
+  `docs/specs/network-egress.md`). IAM confines which resources your code may *touch*; it says
+  nothing about where deployed code *sends data* — a Lambda outside a VPC can reach the whole
+  internet. So say it, in the manifest. **This field is about the code you DEPLOY** — your
+  Lambdas, your instances. What your poppy's own frontend and backend connect to on the user's
+  machine is a separate declaration, door 3 below.
+
+  ```json
+  "network": { "egress": "none" }            // your deployed compute makes NO internet connections
+  "network": { "egress": "aws-only" }        // it calls AWS services, no third parties
+  "network": { "egress": ["api.stripe.com"] }// the third-party hosts it talks to, named — bare
+                                             // hostnames, no schemes, paths or wildcards
+  "network": { "egress": "user-directed" }   // it reaches the internet only under the user's
+                                             // request (an agent browsing on instruction) —
+                                             // shown as your declaration, never host-enforced,
+                                             // and reviewed hard: this value is for poppies
+                                             // whose PURPOSE is user-directed reach, not a
+                                             // way out of naming your endpoints
+  ```
+
+  If your poppy deploys no cloud compute, omit the field — the screen shows nothing either way.
+  If it does and you omit it, the screen states the fact for you: *"Its cloud code can reach the
+  internet… this poppy does not say where its cloud code connects."* A declaration is shown as
+  YOUR statement ("Declares its cloud code…"), because that is what it is — enforcement (a sealed
+  VPC for `"none"`) is a later phase, and the screen never shows a tick for a promise. Declare
+  what is true, not what sounds good: a declaration your code contradicts is the kind of thing an
+  adversarial review finds in minutes, in public source.
+
+  **There are TWO egress doors, and `egress` covers only the first.** The second is the
+  infrastructure your poppy creates *for the user*, whose nature is to be on the internet — a VM
+  exists to reach the network, a website to serve it, a mail system to exchange mail with the
+  world. Declare it with `infrastructure`:
+
+  ```json
+  "network": { "egress": "none", "infrastructure": "servers" }   // VMs / instances for the user
+  "network": { "egress": "none", "infrastructure": "websites" }  // sites it hosts for the user
+  "network": { "egress": "aws-only", "infrastructure": "email" } // a mail system it builds
+  ```
+
+  The screen states its purpose in platform words ("The servers it creates for you can reach the
+  internet") — you don't write that copy, so it can't be gamed. Omit it (or `"none"`) when your
+  poppy creates nothing internet-facing.
+
+  **The rule that makes door 2 safe to declare — and it is a listing condition:** infrastructure
+  your poppy creates carries what the USER puts on it, and nothing else. A poppy that routes the
+  user's cloud data, browsing, or activity out through infrastructure it created — telemetry,
+  analytics beacons, relaying content the user did not place there — without the user's explicit,
+  visible consent is delisted. This is not a style rule; it is the promise the permission screen
+  makes on your behalf, in so many words, to every user who approves you.
+
+- **Door 3 — your own code ON THE USER'S MACHINE, and the one door the host actually holds**
+  (`permissionSet.network.machine`, spec: `docs/specs/machine-gate.md`). Your frontend tab and
+  your confined backend run on someone's laptop with that laptop's network. Declare where they
+  connect, in the same vocabulary as door 1:
+
+  ```json
+  "network": { "egress": "aws-only", "machine": "aws-only" }                    // AWS and nothing else
+  "network": { "egress": "none", "machine": ["api.stripe.com"] }                // named hosts
+  "network": { "egress": "none", "machine": "none" }                            // loopback only
+  "network": { "egress": "aws-only", "machine": "user-directed" }               // it connects where the USER sends it
+  ```
+
+  **This one is enforced, not just displayed.** When you declare it, the host arms a gate around
+  your poppy before your code loads: your backend's socket connects and DNS lookups are checked
+  against the list and *refused* if they are not on it (`APP_NET_GATE_REFUSED`), and your tab is
+  served a Content-Security-Policy the webview engine itself enforces. So declare what your code
+  really does, or your poppy breaks on the user's machine — undeclared hosts fail, and they fail
+  in production, not in your dev loop.
+
+  Two things are never collateral and you do not declare them: **loopback** (your own backend's
+  port, the broker's port) and **the AgentsPoppy API** from your frontend — the platform requires
+  the Feedback tab (§9a) and that tab calls `agentspoppy.com` from your own page, so refusing it
+  would be the host breaking its own contract. A *backend* that calls the platform names it like
+  any other host.
+
+  **Omit `machine` and nothing breaks:** the host observes instead — every external destination is
+  logged once, allowed, and shown to the user as something your poppy connected to. That is the
+  state every poppy written before this field is in. The cost of staying there is that your
+  permission screen can never say *Host-enforced*: a declaration about your cloud code earns
+  nothing on this plane, because it was never about it.
+
+  **Use `"user-directed"` honestly.** It is for reach the user themselves points at — an IMAP
+  server they type in, a page an agent visits on their instruction. It buys no enforcement (there
+  is no list to refuse against), it is logged, and it is reviewed hard. It is not a way to avoid
+  naming your endpoints.
+
 **The acceptance test.** Install your poppy and open its permission screen. Do NOT chase a colour —
 the previous version of this line told you to, and it was wrong on three counts: the text it quoted
 no longer exists, six of the eight shipped poppies are red, and red does not mean what it said. A
@@ -541,6 +627,18 @@ grant that is not confined to your own resources (§3), and `validate-manifest` 
 **reconciles** the connection to it — change your declared scope and the host revokes + recreates
 the connection for the user to re-approve. So the manifest can never silently drift from what you
 actually ask for. Keep it in lockstep with your real IAM deploy policy (mirror one from the other).
+
+The permission set also carries the **network declaration** (§3) — where the code you deploy
+connects, what internet-facing infrastructure you build for the user, and where your own code
+connects **on the user's machine**:
+
+```jsonc
+  "network": {
+    "egress": "aws-only",        // door 1 — the cloud code you deploy
+    "infrastructure": "email",   // door 2 — what you build FOR the user (omit if nothing)
+    "machine": "aws-only"        // door 3 — your frontend + backend, here. ENFORCED by the host.
+  },
+```
 
 **Validate it before you install** — the same structural check the host runs, reporting every
 problem at once (exit 1 on failure, so it's CI-friendly):
@@ -884,6 +982,11 @@ answer the user has forgotten a minute later. Put the number where the decision 
 - [ ] `requiredTags` includes `agentspoppy:connection`; your creates/stack stamp it; you hold the
       matching `TagResource` actions.
 - [ ] `capabilities` lists **only** what your frontend actually calls.
+- [ ] **Network declared** ([§3](#3-the-security-rules-non-negotiable)): `network.egress` says
+      where the code you deploy connects (required to list if your grants can deploy compute), and
+      `network.machine` says where your own frontend and backend connect on the user's machine.
+      Door 3 is **enforced** — run the poppy with it declared and confirm nothing you need is
+      refused, because an undeclared host fails on the user's machine, not in your dev loop.
 - [ ] Manifest scope is in lockstep with your real IAM deploy policy.
 - [ ] Installed, the extension rates **amber/green** with no beyond-own findings.
 - [ ] **Leaves no trace** ([§4](#4-teardown--your-poppy-must-leave-no-trace)): `npm run certify --

@@ -338,3 +338,34 @@ describe("stopChild", () => {
     expect(Date.now() - start).toBeLessThan(200);
   });
 });
+
+it("pipes the child's net-gate stderr lines to onGateLine — the record's wire (real spawn)", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ap-gateline-"));
+  const dataDir = await mkdtemp(join(tmpdir(), "ap-gateline-data-"));
+  const port = await deadPort();
+  await writeFile(
+    join(root, "index.cjs"),
+    `const http = require("node:http");
+     console.error("net-gate: REFUSED connect to evil.example — not in this poppy's declared network egress");
+     console.error("just ordinary stderr");
+     const boot = JSON.parse(process.env.AGENTSPOPPY_BOOTSTRAP);
+     http.createServer((q, r) => r.end("ok")).listen(boot.port, "127.0.0.1");`,
+  );
+  const manifest = {
+    id: "com.test.gateline",
+    backend: { entry: "index.cjs", transport: "http", runtime: "node22" },
+  } as unknown as ExtensionManifest;
+  const lines: string[] = [];
+  const proc = await new NodeBackendHost({ readinessTimeoutMs: 10_000, readinessIntervalMs: 25 }).start({
+    manifest,
+    root,
+    bootstrap: { connectionId: "c1", credentialsUrl: "http://127.0.0.1:1/creds", port, dataDir } as never,
+    onGateLine: (l) => lines.push(l),
+  });
+  expect(proc.running).toBe(true);
+  await new Promise((r) => setTimeout(r, 200)); // stderr is async of readiness
+  expect(lines).toHaveLength(1);
+  expect(lines[0]).toContain("REFUSED connect to evil.example");
+  await proc.stop();
+  await rm(root, { recursive: true, force: true });
+});
