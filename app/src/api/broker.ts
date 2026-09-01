@@ -299,7 +299,7 @@ export const broker = {
    */
   setupStatus: () => req<SetupVersionStatus>("/aws/setup-status"),
   /** This machine's operator-key id + mint time (never secrets) — the key-age nudge. */
-  operatorKeyInfo: () => req<{ profileKeyId: string | null; mintedAt: string | null; secretCustody?: "keychain" | "file" | "none" }>("/aws/key-info"),
+  operatorKeyInfo: () => req<{ profileKeyId: string | null; mintedAt: string | null; secretCustody?: "keychain" | "file" | "none"; vaultName?: string }>("/aws/key-info"),
   /**
    * The kill switch: delete THIS machine's operator access key in AWS, then forget it
    * locally. 409 not_operator → route to the key switch; 409 setup_outdated → re-apply

@@ -879,12 +879,14 @@ describe("the page order — the floor opens, the risks close (founder, 2026-09-
     const heads = [...document.querySelectorAll("h3")].map((h) => h.textContent ?? "");
     expect(heads[0]).toMatch(/Controls/);
     expect(heads[1]).toMatch(/What AgentsPoppy enforces/);
-    // The weigh panel sits before Activity (founder, 2026-09-01) — the last
-    // permission panel, with the audit log after it.
+    // Founder-set order (2026-09-01, twice refined): the weigh panel is PROMOTED above
+    // the observed record — judgement first, evidence right under it — and Activity
+    // closes the page.
     expect(heads[heads.length - 1]).toMatch(/Activity/);
-    expect(heads[heads.length - 2]).toMatch(/What to weigh before you say yes/);
-    // and the boundary still precedes the observed record
-    expect(heads.indexOf("What it can do")).toBeLessThan(heads.findIndex((h) => /actually done/.test(h)));
+    expect(heads[heads.length - 2]).toMatch(/actually done/);
+    expect(heads[heads.length - 3]).toMatch(/What to weigh before you say yes/);
+    // and the boundary still precedes the weigh panel
+    expect(heads.indexOf("What it can do")).toBeLessThan(heads.findIndex((h) => /What to weigh/.test(h)));
   });
 
   it("every row starts collapsed — opening it is the reader's choice", () => {

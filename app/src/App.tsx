@@ -17,6 +17,7 @@ import { PurchasesView } from "./views/PurchasesView";
 import { OnboardingSplash } from "./views/OnboardingSplash";
 import { ApprovalsBar } from "./components/ApprovalsBar";
 import { UpdateBanner } from "./components/UpdateBanner";
+import { CustodyNotice } from "./components/CustodyNotice";
 import { SetupUpdateBanner } from "./components/SetupUpdateBanner";
 import { OperatorKeyBanner } from "./components/OperatorKeyBanner";
 import { WhatsNew } from "./components/WhatsNew";
@@ -472,6 +473,7 @@ export function App() {
         )}
 
         <UpdateBanner />
+        <CustodyNotice />
         {/* The two setup banners are mutually exclusive by which key this machine holds, so a
             user is never shown two primary buttons for what is really one job (field report
             2026-08-30). On a SETUP key, step 0 owns the flow — one click switches the key AND

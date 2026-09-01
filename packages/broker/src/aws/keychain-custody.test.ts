@@ -18,8 +18,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { platform } from "node:os";
 import { KEYCHAIN_SERVICE, keychainRead, keychainStore, setKeychainExecForTests } from "./keychain";
+import { setVaultForTests } from "./vault";
 import {
-  KEYCHAIN_MARKER,
   migrateSecretToKeychain,
   operatorCredentials,
   readProfileInlineSecret,
@@ -29,7 +29,10 @@ import {
 } from "./credentials";
 
 const darwin = platform() === "darwin";
-const d = describe.skipIf(!darwin); // keychainAvailable() gates on darwin; CI Linux skips
+// Custody logic runs on EVERY platform through the injected vault — CI Linux and a
+// future Windows runner test the same migration/resolution/removal properties the
+// founder's Mac does. Only the exec-level keychain tests stay darwin-gated.
+const d = describe;
 
 let dir: string;
 let vault: Map<string, string>;
@@ -40,6 +43,17 @@ beforeEach(() => {
   process.env.AWS_SHARED_CREDENTIALS_FILE = join(dir, "credentials");
   vault = new Map();
   failStore = false;
+  setVaultForTests({
+    name: "test vault",
+    available: () => true,
+    store: (k, v) => {
+      if (failStore) return false;
+      vault.set(k, v);
+      return true;
+    },
+    read: (k) => vault.get(k) ?? null,
+    remove: (k) => vault.delete(k),
+  });
   setKeychainExecForTests((_file, args, opts) => {
     if (args[0] === "-i") {
       if (failStore) throw new Error("keychain denied");
@@ -64,6 +78,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setVaultForTests(null);
   setKeychainExecForTests(null);
   delete process.env.AWS_SHARED_CREDENTIALS_FILE;
   rmSync(dir, { recursive: true, force: true });
@@ -77,7 +92,7 @@ d("writing a new key", () => {
   it("puts the secret straight in the keychain — the file never holds it", () => {
     writeAgentsPoppyProfile({ accessKeyId: KEY, secretAccessKey: SECRET });
     expect(vault.get(KEY)).toBe(SECRET);
-    expect(file()).toContain(KEYCHAIN_MARKER);
+    expect(file()).toContain("# aws_secret_access_key is in the");
     expect(file()).not.toContain(SECRET);
     expect(secretCustody()).toBe("keychain");
   });
@@ -115,7 +130,7 @@ d("migration — verify before you strip", () => {
     expect(migrateSecretToKeychain()).toBe("migrated");
     expect(vault.get(KEY)).toBe(SECRET);
     expect(file()).not.toContain(SECRET);
-    expect(file()).toContain(KEYCHAIN_MARKER);
+    expect(file()).toContain("# aws_secret_access_key is in the");
     expect(file()).toContain(KEY); // the key id stays
   });
 
@@ -171,7 +186,9 @@ d("removal", () => {
   });
 });
 
-d("the keychain module itself", () => {
+describe.skipIf(!darwin)("the keychain module itself (real exec shape, darwin only)", () => {
+  // These go through the keychain exec seam, not the vault override.
+  beforeEach(() => setVaultForTests(null));
   it("store verifies its own readback", () => {
     expect(keychainStore(KEY, SECRET)).toBe(true);
     expect(keychainRead(KEY)).toBe(SECRET);

@@ -816,6 +816,69 @@ export function ConnectionDetailView(props: ConnectionDetailViewProps) {
         })}
       </div>
 
+      <h3>What to weigh before you say yes</h3>
+      <p className="muted section-note">
+        Grouped by what it means, worst first. Open a row for the exact permissions behind it —
+        you can disagree with any one line, which is the point.
+      </p>
+      {findings.length === 0 ? (
+        <div className="risk-card risk-card--ok">
+          <Icon name="check" />
+          <div>
+            <strong>Nothing here reaches beyond its own resources</strong>
+            <p>Every permission is confined, and none of them touches how access is granted.</p>
+          </div>
+        </div>
+      ) : (
+        <div className="findings">
+          {/* Every row starts COLLAPSED (founder, 2026-09-01): the summary line is the
+              panel — title, triage, supervision — and opening it is the reader's choice,
+              not ours. Pre-expanding the worst rows made the screen a wall of alarm. */}
+          {findings.map((f) => (
+            <details key={f.id} className={`finding finding--${f.triage}`}>
+              <summary>
+                {f.services.length > 0 && (
+                  <span className="finding-svc">{f.services.map((x) => x.toUpperCase()).join(" · ")}</span>
+                )}
+                <span className="finding-title">{f.title}</span>
+                <span className={`pill-triage pill-triage--${f.triage}`}>
+                  {f.triage === "weigh" ? "Weigh this" : f.triage === "know" ? "Worth knowing" : f.triage === "forced" ? "AWS gives no narrower form" : "Nothing to weigh"}
+                </span>
+                {c.supervised && f.gated && (
+                  <span
+                    className="supervised-pill"
+                    title={`Supervised — this access reaches beyond ${c.app.name}'s own resources. AgentsPoppy holds its credentials for your approval, so nothing here happens until you say yes.`}
+                  >
+                    <span className="supervised-dot" /> Supervised
+                  </span>
+                )}
+              </summary>
+              <div className="finding-body">
+                {f.context && <p className="finding-context">{f.context}</p>}
+                {f.reason && (
+                  <p className="cap-reason">
+                    <span className="cap-reason-label">Developer&rsquo;s note — in their own words</span>
+                    {f.reason}
+                  </p>
+                )}
+                <div className="finding-acts">
+                  {([["Changes", f.actions.changes], ["Creates", f.actions.creates], ["Sends", f.actions.sends], ["Labels", f.actions.labels], ["Reads", f.actions.reads], ["Reads secrets", f.actions.secrets]] as const).map(
+                    ([label, acts]) =>
+                      acts.length > 0 && (
+                        <p key={label} className="finding-actline">
+                          <b>{label}:</b> {acts.join(", ")}
+                        </p>
+                      ),
+                  )}
+                </div>
+                <p className="finding-scope">{f.scopeLine}</p>
+                {observedLine(f) && <p className="finding-observed">{observedLine(f)}</p>}
+              </div>
+            </details>
+          ))}
+        </div>
+      )}
+
       <h3>What it has actually done</h3>
       {/* The observed register (docs/specs/permission-presentation.md): the one column
           neither the platform nor the developer writes — CloudTrail wrote it. Three states,
@@ -924,69 +987,6 @@ export function ConnectionDetailView(props: ConnectionDetailViewProps) {
               );
             })}
           </ul>
-        </div>
-      )}
-
-      <h3>What to weigh before you say yes</h3>
-      <p className="muted section-note">
-        Grouped by what it means, worst first. Open a row for the exact permissions behind it —
-        you can disagree with any one line, which is the point.
-      </p>
-      {findings.length === 0 ? (
-        <div className="risk-card risk-card--ok">
-          <Icon name="check" />
-          <div>
-            <strong>Nothing here reaches beyond its own resources</strong>
-            <p>Every permission is confined, and none of them touches how access is granted.</p>
-          </div>
-        </div>
-      ) : (
-        <div className="findings">
-          {/* Every row starts COLLAPSED (founder, 2026-09-01): the summary line is the
-              panel — title, triage, supervision — and opening it is the reader's choice,
-              not ours. Pre-expanding the worst rows made the screen a wall of alarm. */}
-          {findings.map((f) => (
-            <details key={f.id} className={`finding finding--${f.triage}`}>
-              <summary>
-                {f.services.length > 0 && (
-                  <span className="finding-svc">{f.services.map((x) => x.toUpperCase()).join(" · ")}</span>
-                )}
-                <span className="finding-title">{f.title}</span>
-                <span className={`pill-triage pill-triage--${f.triage}`}>
-                  {f.triage === "weigh" ? "Weigh this" : f.triage === "know" ? "Worth knowing" : f.triage === "forced" ? "AWS gives no narrower form" : "Nothing to weigh"}
-                </span>
-                {c.supervised && f.gated && (
-                  <span
-                    className="supervised-pill"
-                    title={`Supervised — this access reaches beyond ${c.app.name}'s own resources. AgentsPoppy holds its credentials for your approval, so nothing here happens until you say yes.`}
-                  >
-                    <span className="supervised-dot" /> Supervised
-                  </span>
-                )}
-              </summary>
-              <div className="finding-body">
-                {f.context && <p className="finding-context">{f.context}</p>}
-                {f.reason && (
-                  <p className="cap-reason">
-                    <span className="cap-reason-label">Developer&rsquo;s note — in their own words</span>
-                    {f.reason}
-                  </p>
-                )}
-                <div className="finding-acts">
-                  {([["Changes", f.actions.changes], ["Creates", f.actions.creates], ["Sends", f.actions.sends], ["Labels", f.actions.labels], ["Reads", f.actions.reads], ["Reads secrets", f.actions.secrets]] as const).map(
-                    ([label, acts]) =>
-                      acts.length > 0 && (
-                        <p key={label} className="finding-actline">
-                          <b>{label}:</b> {acts.join(", ")}
-                        </p>
-                      ),
-                  )}
-                </div>
-                <p className="finding-scope">{f.scopeLine}</p>
-                {observedLine(f) && <p className="finding-observed">{observedLine(f)}</p>}
-              </div>
-            </details>
-          ))}
         </div>
       )}
 

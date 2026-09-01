@@ -23,6 +23,7 @@ import {
   writeAgentsPoppyProfile,
   type AwsKeyInput,
 } from "./credentials";
+import { vaultName } from "./vault";
 import { DEFAULT_OPERATOR_NAME, TEMPLATE_VERSION } from "./role-template";
 import { maintenanceCredentials } from "./maintenance";
 import {
@@ -54,6 +55,8 @@ export interface OperatorKeyInfo {
    * (legacy, or a non-macOS platform); "none" — no profile stored.
    */
   secretCustody: "keychain" | "file" | "none";
+  /** The user-facing vault name for this platform — "macOS Keychain", "Windows Credential Manager", "system keyring". */
+  vaultName: string;
 }
 
 /** The kill switch failed for a reason the UI must route, not just display. */
@@ -131,6 +134,7 @@ export function sdkAwsBootstrap(): AwsBootstrap {
         profileKeyId: readAgentsPoppyProfileKeyId(),
         mintedAt: readOperatorKeyRecord()?.mintedAt ?? null,
         secretCustody: secretCustody(),
+        vaultName: vaultName(),
       };
     },
 
@@ -249,7 +253,7 @@ export class StubAwsBootstrap implements AwsBootstrap {
     return { ok: true, assumedArn: `${roleArn}/${HOST_SESSION_PREFIX}verify` };
   }
   async operatorKeyInfo(): Promise<OperatorKeyInfo> {
-    return { profileKeyId: "AKIASTUBOPERATORKEY", mintedAt: new Date().toISOString(), secretCustody: "keychain" };
+    return { profileKeyId: "AKIASTUBOPERATORKEY", mintedAt: new Date().toISOString(), secretCustody: "keychain", vaultName: "macOS Keychain" };
   }
   async revokeOperatorKey(): Promise<{ deletedKeyId: string; alreadyGone: boolean }> {
     // Demo/test: simulate the revoke without touching AWS or ~/.aws.

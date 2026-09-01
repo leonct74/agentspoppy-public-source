@@ -42,6 +42,13 @@ jobs:
       - name: Broker unit tests
         run: npm test -w @agentspoppy/broker
 
+      # The REAL Credential Manager round trip (docs/specs/operator-key-custody.md) —
+      # CredWrite/CredRead/CredDelete against the runner's actual vault.
+      - name: vault smoke (Credential Manager)
+        run: npx tsx scripts/vault-smoke.mjs
+        env:
+          AP_VAULT_DEBUG: "1"
+
       - name: Build broker (win32-x64 Node SEA)
         run: npm run build:broker -w @agentspoppy/app
 

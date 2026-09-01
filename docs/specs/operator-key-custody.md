@@ -80,10 +80,21 @@ validated (AWS secrets are `[A-Za-z0-9/+=]`) before being embedded in a command 
 - This removes, it does not forensically erase: the secret's old blocks may persist on
   the SSD, exactly as the existing remover documents.
 
+## Phase 2b — Windows and Linux (implemented 2026-09-01, Option B: one combined wave)
+
+`vault.ts` dispatches per platform; custody code is platform-blind. Windows goes through
+the real CredRead/CredWrite/CredDelete API P/Invoked from PowerShell — the built-in
+`cmdkey` can write but cannot READ back, and a readback it cannot do is a verification it
+cannot give. Transport is pinned by test: script on stdin, secret in the child's
+environment, never argv. Linux uses `secret-tool` (secret on stdin both ways), with the
+honest platform truth stated in code: a machine with no unlocked keyring keeps file
+custody and nothing breaks — the vault is an upgrade where the desktop provides one,
+never a requirement. The custody suite runs on every platform through the vault seam,
+and `scripts/vault-smoke.mjs` does the real OS round trip in each CI build (macOS run
+live on the founder's machine: PASS).
+
 ## What does NOT change
 
-- Windows/Linux keep file custody until the next release (Credential Manager / Secret
-  Service respectively, same shape, CI-built).
 - The assume-only key (v4), the kill switch, backend confinement, `AWS_*` stripping —
   all unchanged. Phase 2 stacks on them.
 - No mechanism (§4) file changes: the resolver lives in `credentials.ts`, which is not

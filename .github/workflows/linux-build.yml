@@ -48,6 +48,30 @@ jobs:
       - name: Broker unit tests
         run: npm test -w @agentspoppy/broker
 
+      # The REAL Secret Service round trip (docs/specs/operator-key-custody.md): unit
+      # tests pin the logic with injected vaults; only a live keyring proves the actual
+      # mechanism. gnome-keyring needs a dbus session and an unlocked daemon on a
+      # headless runner.
+      # A fresh headless runner has NO keyring collection, and creating one prompts via
+      # the (displayless) gcr-prompter — so seed a plaintext, lockless default keyring
+      # on disk first. The daemon loads it already unlocked; no prompt, no password.
+      - name: vault smoke (Secret Service)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq gnome-keyring libsecret-tools dbus-x11
+          mkdir -p ~/.local/share/keyrings
+          printf 'Default_keyring' > ~/.local/share/keyrings/default
+          printf '[keyring]\ndisplay-name=Default keyring\nctime=0\nmtime=0\nlock-on-idle=false\nlock-after=false\n' > ~/.local/share/keyrings/Default_keyring.keyring
+          cat > /tmp/vault-smoke-inner.sh <<'EOF'
+          #!/bin/bash
+          set -e
+          eval "$(gnome-keyring-daemon --start --components=secrets)"
+          npx tsx scripts/vault-smoke.mjs
+          EOF
+          chmod +x /tmp/vault-smoke-inner.sh
+          dbus-run-session -- /tmp/vault-smoke-inner.sh
+        env:
+          AP_VAULT_DEBUG: "1"
+
       - name: Build broker (linux-x64 Node SEA)
         run: npm run build:broker -w @agentspoppy/app
 

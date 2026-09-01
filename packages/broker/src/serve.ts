@@ -324,9 +324,10 @@ async function main(): Promise<void> {
   // touched, any failure leaves everything as it was. Once per start, logged, never fatal.
   if (!demo) {
     const { migrateSecretToKeychain } = await import("./aws/credentials");
+    const { vaultName } = await import("./aws/vault");
     const custody = migrateSecretToKeychain();
-    if (custody === "migrated") console.log("operator key: secret moved into the macOS Keychain");
-    else if (custody === "failed") console.log("operator key: Keychain migration failed — secret stays in ~/.aws/credentials");
+    if (custody === "migrated") console.log(`operator key: secret moved into the ${vaultName()}`);
+    else if (custody === "failed") console.log(`operator key: ${vaultName()} migration failed — secret stays in ~/.aws/credentials`);
   }
 
   const service = new BrokerService({ store: new Store(), credentials, cloud, aws, activity });
