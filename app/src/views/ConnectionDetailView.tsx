@@ -2,9 +2,13 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.0
 
 import { useState } from "react";
-import type { AuditEntry, Connection, InfraGraph, Inventory, ResidualResource } from "@agentspoppy/core";
+import type { ActivityEvent, AuditEntry, Connection, InfraGraph, Inventory, ResidualResource } from "@agentspoppy/core";
 import {
   assessPermissionSet,
+  brokerGuarantees,
+  grantCannotBeNarrowed,
+  serviceStake,
+  summarizeObserved,
   awsConsoleUrl,
   grantCanDestroy,
   grantCanLaunchUntracked,
@@ -25,6 +29,13 @@ export interface ConnectionDetailViewProps {
   connection: Connection;
   inventory: Inventory;
   audit: AuditEntry[];
+  /**
+   * The observed register: what this poppy has actually done (CloudTrail, app-keyed).
+   * null = still loading · "unavailable" = the trail could not be read — and the view must
+   * keep those three states apart, because "no events" is only meaningful when the trail
+   * was actually readable.
+   */
+  observed?: { events: ActivityEvent[]; sinceMinutes: number } | "unavailable" | null;
   /** The verified service graph — drawn as the infrastructure map. Null while still loading. */
   infra?: InfraGraph | null;
   /** The map is still being fetched/verified — show a placeholder so it doesn't pop in. */
@@ -177,21 +188,28 @@ export function ConnectionDetailView(props: ConnectionDetailViewProps) {
     return tb - ta;
   });
 
-  // Concrete cross-account risks, colour-coded: unscoped grants (red/amber) plus
-  // any set-level warning (e.g. missing attribution tags). Empty → a green all-clear.
-  // `gated` findings are per-service grants that supervised mode actually holds for
-  // your approval — those carry the "Supervised" pill when supervision is on.
-  const riskFindings: {
+  type Finding = {
     level: "high" | "medium";
     title: string;
     body: string;
     gated: boolean;
     service?: string;
-  }[] = [
+  };
+
+  // THE STANDARD these two sections follow (docs/specs/permission-presentation.md):
+  //
+  //   "What it can do"  — the BOUNDARY of each permission. What is inside the fence.
+  //   "What's at stake" — the CONSEQUENCE if that boundary is not maintained.
+  //
+  // They answer different questions, so they legitimately carry different colours for the
+  // same grant, and a confined grant can still be red here. AffiliatePoppy's IAM grant is
+  // bounded to `role/AffiliatePoppy*` — that is the boundary, and it is narrow. But if that
+  // boundary ever failed, what leaks is the power to decide who can do what, which is the
+  // worst thing on the list. Both statements are true at once; the old heading ("Risks to the
+  // rest of your account") was what made them read as a contradiction, because it asserted
+  // reach the scope line had just denied.
+  const stakeFindings: Finding[] = [
     ...risk.grants
-      // `!gr.scoped` alone hid the control-plane case: a grant can be confined to its
-      // own names AND still rate high, and that is exactly the grant a user most needs
-      // to see listed here rather than only as a badge on a card.
       .filter(({ risk: gr }) => (!gr.scoped || gr.level === "high") && gr.level !== "low")
       .map(({ grant, risk: gr }) => ({
         level: gr.level as "high" | "medium",
@@ -206,7 +224,10 @@ export function ConnectionDetailView(props: ConnectionDetailViewProps) {
               ? `${grant.service.toUpperCase()} — can create new resources in your account`
               : `${grant.service.toUpperCase()} — can read resources beyond its own`,
         body: gr.reason,
-        gated: true,
+        // `gated` means supervision actually holds this for approval — which is driven by
+        // hasUnscopedGrants (broker service.ts). A CONFINED grant is never why a connection is
+        // supervised, and the Supervised pill's tooltip says it is, so it must not carry one.
+        gated: !gr.scoped,
         service: grant.service.toUpperCase(),
       })),
     ...risk.warnings.map((w) => ({
@@ -215,13 +236,20 @@ export function ConnectionDetailView(props: ConnectionDetailViewProps) {
       body: w,
       gated: false,
     })),
-  ];
+  ]
+    // Worst first, not manifest order. This panel closes the page, and most readers stop
+    // after the first card or two — the order decides what they actually learn. High before
+    // medium; within a level, account-wide reach before confined.
+    .sort((a, b) => {
+      if (a.level !== b.level) return a.level === "high" ? -1 : 1;
+      if (a.gated !== b.gated) return a.gated ? -1 : 1;
+      return 0;
+    });
 
-  // The capabilities that make this connection reach beyond its own resources —
-  // the reason it's supervised. Supervision is enforced per-connection (the broker
-  // holds the credential mint), so these are the "why", not individually gatable.
+  // The capabilities that make this connection reach beyond its own resources — the reason
+  // it's supervised. Confined grants are excluded above, so this can no longer name one.
   const reachServices = [
-    ...new Set(riskFindings.filter((f) => f.gated && f.service).map((f) => f.service as string)),
+    ...new Set(stakeFindings.filter((f) => f.gated && f.service).map((f) => f.service as string)),
   ];
 
   return (
@@ -704,6 +732,27 @@ export function ConnectionDetailView(props: ConnectionDetailViewProps) {
         </div>
       )}
 
+      <h3>What AgentsPoppy enforces</h3>
+      <p className="muted section-note">
+        The floor under everything below — enforced by the platform whatever {c.app.name} asks
+        for. Each line says where it is pinned, because a guarantee you cannot check is just a
+        claim. Three of them depend on this poppy and say so when they do not apply.
+      </p>
+      <ul className="guarantee-list">
+        {brokerGuarantees(c.permissionSet, { supervised: c.supervised ?? false }).map((g) => (
+          <li key={g.id} className={g.holds ? "g-holds" : "g-absent"}>
+            <span className="g-mark" aria-hidden="true">{g.holds ? "✓" : "—"}</span>
+            <span className="g-body">
+              {/* When it does not hold, the ABSENCE is the message — the promise is shown
+                  struck so the user sees what they are not getting, not just prose. */}
+              <span className={g.holds ? undefined : "g-struck"}>{g.text}</span>
+              {g.absent ? <span className="g-why">{g.absent}</span> : null}
+              <span className="g-pin">{g.pin}</span>
+            </span>
+          </li>
+        ))}
+      </ul>
+
       <h3>What it built in your cloud</h3>
       {props.infraError ? (
         <div className="notice notice--warn infra-unreadable" role="alert">
@@ -740,10 +789,18 @@ export function ConnectionDetailView(props: ConnectionDetailViewProps) {
           // "Resources matching arn:aws:route53:::hostedzone/*" sat directly under a red
           // Unscoped badge and told the user the opposite of what the badge said — and
           // that pattern really does match every hosted zone in the account.
+          // Two kinds of "its own", and the card must not call them the same thing
+          // (docs/specs/permission-presentation.md rule 3). A tag scope PROVES ownership:
+          // I3 births every resource tagged or refuses it, and the tag cannot be forged
+          // onto someone else's. A name pattern only bounds a namespace — it genuinely
+          // cannot reach outside it, but nothing enforces that the poppy created what
+          // sits under that name. 44 of the fleet's 56 confined grants are name-scoped;
+          // all of them used to render "Only its own resources", an ownership claim the
+          // mechanism does not make.
           const where = gr.scoped
             ? grant.resourceScope === "tagged-as-self"
-              ? "Only its own (tagged) resources"
-              : `Only its own resources (${grant.resourceScope})`
+              ? "Only what it created — born tagged as its own, enforced by AWS"
+              : `Anything named ${grant.resourceScope} — bounded by name, not by ownership`
             : grantCanLaunchUntracked(grant)
               ? "New resources anywhere in your account — untagged, so not tracked"
               : grantCanMutate(grant) && !grantCanDestroy(grant)
@@ -751,6 +808,11 @@ export function ConnectionDetailView(props: ConnectionDetailViewProps) {
                 : grant.resourceScope === "*" || grant.resourceScope.length === 0
                   ? "Any resource in your account"
                   : `Any resource in your account — ${grant.resourceScope} matches all of them`;
+          // Rule C. The boundary above is honest either way, but "any resource" alone
+          // reads as a choice the developer made. For these actions AWS publishes no
+          // resource types at all, so "*" is the only grant that authorises them and
+          // scoping one would simply deny it. Saying nothing was the accusation.
+          const awsIsTheLimit = !gr.scoped && grantCannotBeNarrowed(grant);
           return (
             <div key={i} className="cap-card">
               <div className="cap-card-head">
@@ -767,40 +829,86 @@ export function ConnectionDetailView(props: ConnectionDetailViewProps) {
                       : "Read-only"}
               </div>
               <p className="cap-where muted">{where}</p>
+              {awsIsTheLimit ? (
+                <p className="cap-note muted">
+                  AWS offers no way to narrow this —{" "}
+                  {grant.actions.length === 1 ? "this action accepts" : "these actions accept"} no
+                  resource limit, so this is the tightest form the permission can take.
+                </p>
+              ) : null}
+              {/* The middle register (docs/specs/permission-presentation.md): what the
+                  permission is FOR, in the developer's own words. AGENTS.md requires it on
+                  every unconfined grant, and only the developer can supply it — the boundary
+                  above is computed, the CloudTrail record comes later. Its standing is a
+                  CLAIM: the label must say whose words these are, and nothing about the
+                  rating or scope may lean on it. Plain text by the manifest validator;
+                  rendered as text by React regardless. */}
+              {grant.reason ? (
+                <p className="cap-reason">
+                  <span className="cap-reason-label">Developer&rsquo;s note — in their own words</span>
+                  {grant.reason}
+                </p>
+              ) : null}
             </div>
           );
         })}
       </div>
 
-      <h3>Risks to the rest of your account</h3>
-      {riskFindings.length === 0 ? (
-        <div className="risk-card risk-card--ok">
-          <Icon name="check" />
-          <div>
-            <strong>No risks to other resources identified</strong>
-            <p>Everything this app can touch is scoped to its own resources.</p>
-          </div>
-        </div>
+      <h3>What it has actually done</h3>
+      {/* The observed register (docs/specs/permission-presentation.md): the one column
+          neither the platform nor the developer writes — CloudTrail wrote it. Three states,
+          kept strictly apart: loading, unreadable, and readable (which includes quiet).
+          A quiet result must not editorialise: CloudTrail is the user's own account-wide
+          setting and the provider swallows per-region failures, so silence is "nothing
+          recorded", never "it did nothing". And restraint is not safety — an unused
+          permission is still a permission, which is why this section can never soften
+          the sections above it. */}
+      {props.observed === "unavailable" ? (
+        <p className="muted section-note">
+          CloudTrail could not be read, so there is no record to show here. CloudTrail is your
+          account&rsquo;s own logging setting; without it, this section can&rsquo;t tell whether
+          anything happened.
+        </p>
+      ) : props.observed == null ? (
+        <p className="muted section-note" role="status">Reading CloudTrail…</p>
       ) : (
-        <div className="risk-grid">
-          {riskFindings.map((f, i) => (
-            <div key={i} className={`risk-card risk-card--${f.level}`}>
-              <Icon name="shield" />
-              <div>
-                <strong>{f.title}</strong>
-                <p>{f.body}</p>
-              </div>
-              {c.supervised && f.gated && (
-                <span
-                  className="supervised-pill"
-                  title={`Supervised — this ${f.service ?? "capability"} access reaches beyond ${c.app.name}'s own resources, which is why the connection is supervised. AgentsPoppy holds its credentials for your approval, so nothing here happens until you say yes.`}
-                >
-                  <span className="supervised-dot" /> Supervised
-                </span>
-              )}
+        (() => {
+          const days = Math.round(props.observed.sinceMinutes / (24 * 60));
+          const ob = summarizeObserved(props.observed.events);
+          if (ob.total === 0) {
+            return (
+              <p className="muted section-note">
+                Nothing recorded in the last {days} days. (CloudTrail is your account&rsquo;s own
+                logging — a region with it switched off contributes nothing here.)
+              </p>
+            );
+          }
+          return (
+            <div className="observed">
+              <p className="muted section-note">
+                From CloudTrail, the last {days} days: {ob.changes} change{ob.changes === 1 ? "" : "s"},{" "}
+                {ob.reads} read{ob.reads === 1 ? "" : "s"}. This is the record AWS kept — neither{" "}
+                {c.app.name} nor AgentsPoppy writes it.
+              </p>
+              {ob.rows.map((r) => (
+                <div key={r.service} className="observed-row">
+                  <span className="observed-svc">{r.service.toUpperCase()}</span>
+                  <span className="observed-counts">
+                    {r.changes > 0 ? `${r.changes} change${r.changes === 1 ? "" : "s"}` : "no changes"}
+                    {" · "}
+                    {r.reads} read{r.reads === 1 ? "" : "s"}
+                  </span>
+                  <span className="observed-actions">
+                    {Object.entries(r.actions)
+                      .sort((a, b) => b[1] - a[1])
+                      .map(([a, n]) => `${a}×${n}`)
+                      .join("  ")}
+                  </span>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          );
+        })()
       )}
 
       {inventory.stacks.map((s) => (
@@ -869,6 +977,48 @@ export function ConnectionDetailView(props: ConnectionDetailViewProps) {
           </li>
         ))}
       </ul>
+
+      <h3>What's at stake if these limits don't hold</h3>
+      <p className="muted section-note">
+        Above is what {c.app.name} can reach. This is what would be exposed if one of those
+        limits failed — so a tightly-bounded permission can still be serious here, and that is
+        not a contradiction.
+      </p>
+      {stakeFindings.length === 0 ? (
+        <div className="risk-card risk-card--ok">
+          <Icon name="check" />
+          <div>
+            <strong>Nothing here would reach beyond its own resources</strong>
+            <p>Every permission is bounded, and none of them touches how access is granted.</p>
+          </div>
+        </div>
+      ) : (
+        <div className="risk-grid">
+          {stakeFindings.map((f, i) => (
+            <div key={i} className={`risk-card risk-card--${f.level}`}>
+              <Icon name="shield" />
+              <div>
+                <strong>{f.title}</strong>
+                <p>{f.body}</p>
+                {/* The hand-written half of Panel 3: what this SERVICE controls, so the
+                    consequence is legible without AWS knowledge. Platform-authored fact
+                    about AWS itself — a missing entry renders nothing, never filler. */}
+                {f.service && serviceStake(f.service) ? (
+                  <p className="stake-context">{serviceStake(f.service)}</p>
+                ) : null}
+              </div>
+              {c.supervised && f.gated && (
+                <span
+                  className="supervised-pill"
+                  title={`Supervised — this ${f.service ?? "capability"} access reaches beyond ${c.app.name}'s own resources, which is why the connection is supervised. AgentsPoppy holds its credentials for your approval, so nothing here happens until you say yes.`}
+                >
+                  <span className="supervised-dot" /> Supervised
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </section>
   );
 }

@@ -53,6 +53,22 @@ export interface PermissionGrant {
   actions: string[];
   /** An ARN pattern, "*", or the {@link TAGGED_AS_SELF} sentinel. */
   resourceScope: string;
+  /**
+   * Optional: why this grant needs the scope it has, in the developer's own words.
+   *
+   * AGENTS.md has asked for this since the Cognito child-create recipe was written, and two
+   * poppies wrote genuinely good ones — but the field did not exist, so the host parsed the
+   * manifest, dropped it, and no user ever saw a word of it.
+   *
+   * **Its standing is a CLAIM, not a fact, and any UI showing it must say so.** It is authored
+   * by the extension developer and nothing verifies it; a hostile manifest can write "this is
+   * completely safe" beside a wildcard. It sits in the "what it is for" register, never in the
+   * "what it can do" one — the boundary line is computed from the grant and is the only thing
+   * on the screen entitled to assert reach. See docs/specs/permission-presentation.md.
+   *
+   * Plain text, rendered as text. Capped by the manifest validator.
+   */
+  reason?: string;
 }
 
 /** Optional dynamic limits. v1 is always null (roadmap: caps, approvals, time windows). */

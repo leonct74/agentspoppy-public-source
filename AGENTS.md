@@ -197,9 +197,79 @@ platform patches touching its enforcement points are checked against that docume
   disable CloudTrail, or attach admin policies — and per-connection scoping only ever _narrows_ it.
   Don't design around this; you can't escalate, by construction.
 
-**The acceptance test:** open your extension in AgentsPoppy after installing. Its permission rating
-must be **amber or green** with **"No risks to other resources identified."** A **red** finding
-means a grant can mutate beyond its own resources — tighten the `resourceScope` until it's gone.
+- **Say why, whenever you reach beyond your own resources — REQUIRED.** Any grant that is not
+  confined (`"*"`, or a pattern that matches everything of its type) MUST carry a `reason`: plain
+  language, for the user deciding whether to install you, not for a reviewer. `npm run
+  validate-manifest` **fails** until every one has it.
+
+  Why this is a rule and not a nicety: the approval screen has three registers, and only one of
+  them can come from you.
+
+  | the user sees | where it comes from |
+  |---|---|
+  | what this permission would allow **if you were malicious** | computed from your grant, by us |
+  | **what you actually use it for** | **your `reason` — nothing else can supply it** |
+  | what your poppy **has actually done** | AWS CloudTrail, attributed to your connection |
+
+  Without the middle one, a user reading HostingPoppy's DNS grant is told *"can change and delete
+  any DNS record in any domain you host"* — true about the permission, and a bad description of an
+  app that writes one record for the domain they typed. Write the sentence that closes that gap.
+  If the honest reason is *"it could be narrower, I didn't"*, **narrow it instead**.
+
+  ```jsonc
+  {
+    "service": "route53",
+    "actions": ["ChangeResourceRecordSets"],
+    "resourceScope": "*",
+    "reason": "Points the address you typed at your site. AWS does not let record changes be limited to one domain, so this permission covers every zone you host — HostingPoppy only ever writes the record you asked for, and shows you what is there first."
+  }
+  ```
+
+- **Know which kind of "its own" you have.** These are not the same guarantee, and the screen is
+  being changed to stop calling them the same thing:
+  - `"tagged-as-self"` — **ownership is proven.** Anything you create is born carrying your tag or
+    AWS refuses to create it (I3), and you cannot stamp that tag on someone else's resource.
+    *"Only the ones it created"* is enforced. **Prefer this wherever the service supports it.**
+  - a **name pattern** (`arn:aws:s3:::yourpoppy*`) — **a bounded namespace.** Real confinement: you
+    genuinely cannot reach `/production/*`. But nothing enforces that you *created* what sits under
+    that name, so if the user puts something there, you can touch it. Use it when tag-scoping is
+    impossible, not as the default.
+  - `"*"` — everything of that type. Needs a `reason`, always.
+
+- **Split a mixed grant.** Some AWS actions cannot be narrowed at all: AWS publishes no resource
+  types for them, so `"*"` is the only Resource that authorises them and scoping one *denies* it.
+  `ec2:Describe*`, `sts:GetCallerIdentity`, `pricing:GetProducts`, most of the SES receipt-rule API.
+  Those are fine at `"*"` and the screen now says so on your behalf — *"AWS offers no way to narrow
+  this"*.
+
+  **The trap is putting narrowable actions in the same grant.** They inherit the `"*"` and the
+  explanation covers them, so a permission that could have been pinned to one resource silently
+  reads as forced. MailPoppy has five grants in this state — its SES grant mixes 13 genuinely
+  forced actions with six that scope to a single verified identity, `SendEmail` among them.
+  **Two grants, not one:** the forced actions at `"*"`, everything else scoped. Check each action
+  against AWS's published service reference (`https://servicereference.us-east-1.amazonaws.com/` —
+  an action listed with no resource types is a forced one) rather than assuming.
+
+- **Write `permissionSet.description` for the user, not the reviewer.** It is what the approval
+  screen shows as *what this poppy is for*, next to the permissions it explains. Say what you build
+  and where you put it. HostingPoppy's is the reference; AffiliatePoppy's is close behind.
+
+**The acceptance test.** Install your poppy and open its permission screen. Do NOT chase a colour —
+the previous version of this line told you to, and it was wrong on three counts: the text it quoted
+no longer exists, six of the eight shipped poppies are red, and red does not mean what it said. A
+grant confined to roles named `YourPoppy*` rates red because creating a role is creating an
+identity, which is true however tightly you scope it. That is not a defect you can fix.
+
+What you must be able to answer, for every line on that screen:
+
+1. **Does it reach beyond your own resources?** If yes, is that genuinely unavoidable? Look for the
+   half you could have narrowed — a mixed grant is the common case, and it hides behind the half
+   that AWS really does force (below).
+2. **Does the line name the right service and the right scope?** If the screen describes a reach
+   you do not have, that is a platform bug — report it. If it describes one you DO have and you
+   are surprised, that is your manifest.
+3. **Does every unconfined grant carry a `reason` a user could act on?** `npm run
+   validate-manifest` fails until they all do.
 
 ---
 
@@ -427,6 +497,12 @@ A minimal frontend-only manifest:
         "service": "s3",
         "actions": ["GetObject", "PutObject", "DeleteObject"],
         "resourceScope": "arn:aws:s3:::example-app*/*"
+      },
+      {
+        "service": "s3",
+        "actions": ["ListAllMyBuckets"],
+        "resourceScope": "*",                            // AWS publishes no resource type for this one
+        "reason": "Lists bucket NAMES only, never contents — it is how \"Remove everything\" proves nothing of ours is left behind. AWS offers no narrower form of this permission."
       }
     ],
     "limits": null
@@ -452,7 +528,8 @@ And — **only if you create resources outside your CloudFormation stack** — d
   "teardown": { "endpoint": "/teardown" }  // backend route POSTed at the start of teardown; needs a backend
 ```
 
-Each grant is one `{ service, actions[], resourceScope }`. The host re-reads this on every load and
+Each grant is one `{ service, actions[], resourceScope, reason? }` — `reason` is REQUIRED on any
+grant that is not confined to your own resources (§3), and `validate-manifest` fails without it. The host re-reads this on every load and
 **reconciles** the connection to it — change your declared scope and the host revokes + recreates
 the connection for the user to re-approve. So the manifest can never silently drift from what you
 actually ask for. Keep it in lockstep with your real IAM deploy policy (mirror one from the other).

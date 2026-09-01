@@ -178,6 +178,9 @@ const SEMVER_RE = /^\d+\.\d+\.\d+(?:[-+].+)?$/;
  * Validate a parsed manifest object structurally. Pure; collects ALL problems and
  * never throws, so a tool can show the author everything wrong at once.
  */
+/** Longest a per-grant `reason` may be — long enough to explain a scope, short enough to read. */
+export const GRANT_REASON_MAX = 600;
+
 export function validateManifest(value: unknown): ManifestValidationResult {
   const errors: string[] = [];
   if (!value || typeof value !== "object") return { ok: false, errors: ["manifest must be an object"] };
@@ -270,6 +273,19 @@ function validatePermissionSet(ps: unknown, errors: string[]): void {
     if (typeof gr.service !== "string" || gr.service.trim() === "") errors.push(`permissionSet.grants[${i}].service is required`);
     if (!Array.isArray(gr.actions) || gr.actions.length === 0) errors.push(`permissionSet.grants[${i}].actions must be a non-empty array`);
     if (typeof gr.resourceScope !== "string" || gr.resourceScope.trim() === "") errors.push(`permissionSet.grants[${i}].resourceScope is required`);
+    // Optional, but checked when present: this string is shown to the user on the approval
+    // screen, so it is length-capped and must be plain text. It carries no authority — the
+    // scope line beside it is computed — but an unbounded or markup-bearing string still has
+    // no business on a security screen.
+    if (gr.reason !== undefined) {
+      if (typeof gr.reason !== "string" || gr.reason.trim() === "") {
+        errors.push(`permissionSet.grants[${i}].reason must be a non-empty string when present`);
+      } else if (gr.reason.length > GRANT_REASON_MAX) {
+        errors.push(`permissionSet.grants[${i}].reason must be ${GRANT_REASON_MAX} characters or fewer`);
+      } else if (/[<>]/.test(gr.reason)) {
+        errors.push(`permissionSet.grants[${i}].reason must be plain text (no angle brackets)`);
+      }
+    }
   });
 }
 

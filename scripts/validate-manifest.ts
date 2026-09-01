@@ -16,6 +16,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { validateManifest, type ExtensionManifest, effectiveIsolation } from "@agentspoppy/extension-sdk";
+import { grantIsTagScoped, scopeIsUnbounded } from "@agentspoppy/core";
 
 function fail(...lines: string[]): never {
   for (const l of lines) console.error(l);
@@ -72,6 +73,33 @@ if (feedbackProblems.length > 0) {
   );
 }
 
+// Every grant that is NOT confined to the poppy's own resources must say WHY, in the
+// developer's own words (AGENTS.md §3). The approval screen has three registers — what the
+// permission would allow if the poppy were malicious, what it is FOR, and what it has actually
+// done (docs/specs/permission-presentation.md) — and the middle one has no source but the
+// developer. Without it a user reading a wide grant gets the ceiling and nothing else, which is
+// how "changes DNS records you did not create" ends up describing an app that writes one record
+// for the domain you typed.
+//
+// Enforced HERE rather than in the SDK's structural validator, which the host also runs at
+// install time and must keep accepting poppies installed before this rule. Same placement as
+// the Feedback tab above. And a failure, not a warning: this repo already learned that lesson
+// once — the confinement check below printed a warning and exited 0 until an external audit
+// pointed out that a human remembering to read output is not a control.
+const unexplained = (m.permissionSet?.grants ?? []).filter(
+  (g) => !g.reason?.trim() && !grantIsTagScoped(g) && scopeIsUnbounded(g.resourceScope, g.service),
+);
+if (unexplained.length > 0) {
+  fail(
+    `✗ ${path} — ${unexplained.length} grant${unexplained.length === 1 ? "" : "s"} reach beyond your own resources without saying why:`,
+    ...unexplained.map((g) => `  • ${g.service} (${g.actions.length} action${g.actions.length === 1 ? "" : "s"}) on ${g.resourceScope} — add a "reason"`),
+    ``,
+    `Add a plain-language "reason" to each: what you use it for, and why it cannot be narrower.`,
+    `Write it for the user deciding whether to install you, not for a reviewer. If the honest`,
+    `answer is "it could be narrower", narrow it instead — that is the better fix. See AGENTS.md §3.`,
+  );
+}
+
 // Confinement (RUNTIMES.md R7): a backend must declare isolation "strict" to be listable.
 // A structural warning here, so the developer hears it on THEIR machine first — the listing
 // review enforces it for real (the only sanctioned exception is a named one-release migration).
@@ -98,5 +126,7 @@ console.log(
     (m.backend ? `backend: ${m.backend.transport ?? "http"}${m.backend.isolation === "strict" ? " · confined" : ""}` : "frontend-only"),
 );
 console.log(
-  `  Structural check only — install it and confirm the rating is amber/green in AgentsPoppy (AGENTS.md §3).`,
+  `  Structural check only. Install it and read the permission screen — not for a colour (a grant`,
+  `  confined to your own roles is red because creating a role is creating an identity), but to check`,
+  `  every line names the right service and scope, and that nothing reaches wider than you meant.`,
 );

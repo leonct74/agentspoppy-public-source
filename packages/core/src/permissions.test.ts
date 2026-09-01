@@ -67,7 +67,12 @@ describe("describeGrant / describePermissionSet", () => {
   it("renders plain-language blast radius", () => {
     expect(describeGrant({ service: "s3", actions: ["CreateBucket", "DeleteBucket"], resourceScope: TAGGED_AS_SELF }))
       .toBe("Can create, change and delete S3 — only resources tagged as its own.");
+    // ses:GetAccount publishes no resource type, so "*" is the only Resource that can
+    // authorise it — Rule C, and this fixture happened to pick a forced action.
     expect(describeGrant({ service: "ses", actions: ["GetAccount"], resourceScope: "*" }))
+      .toBe("Can read SES — any resource (AWS offers no way to narrow this).");
+    // …whereas this one AWS can narrow to a single identity, so no excuse is offered.
+    expect(describeGrant({ service: "ses", actions: ["GetEmailIdentity"], resourceScope: "*" }))
       .toBe("Can read SES — any resource.");
   });
 
@@ -125,7 +130,7 @@ describe("policy risk", () => {
     const r = assessGrant({ service: "iam", actions: ["CreateRole"], resourceScope: "*" });
     expect(r.level).toBe("high");
     expect(r.scoped).toBe(false);
-    expect(r.reason).toMatch(/ANY IAM resource/);
+    expect(r.reason).toMatch(/any IAM resource/);
   });
 
   it("assessGrant: wildcard read is amber; a concrete name pattern is confined (amber to change, green to read)", () => {

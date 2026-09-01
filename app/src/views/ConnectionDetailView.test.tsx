@@ -3,7 +3,7 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, within } from "@testing-library/react";
-import { TAGGED_AS_SELF, type Connection, type ConnectionStatus, type InfraGraph, type Inventory, type PermissionSet } from "@agentspoppy/core";
+import { TAGGED_AS_SELF, type ActivityEvent, type Connection, type ConnectionStatus, type InfraGraph, type Inventory, type PermissionSet } from "@agentspoppy/core";
 import { ConnectionDetailView } from "./ConnectionDetailView";
 
 afterEach(cleanup);
@@ -26,11 +26,13 @@ function renderDetail(
     onApprove?: () => void;
     onDeny?: () => void;
     onToggleSupervise?: (s: boolean) => void;
+    observed?: { events: ActivityEvent[]; sinceMinutes: number } | "unavailable" | null;
   } = {},
 ) {
   render(
     <ConnectionDetailView
       connection={connWith(ps, opts.status, opts.supervised)} inventory={emptyInventory} audit={[]}
+      observed={opts.observed}
       onBack={noop} onPause={noop} onResume={noop} onRevoke={noop} onTeardown={noop}
       onApprove={opts.onApprove} onDeny={opts.onDeny} onToggleSupervise={opts.onToggleSupervise}
     />,
@@ -126,7 +128,7 @@ describe("ConnectionDetailView — policy risk", () => {
       requiredTags: ["agentspoppy:account", "agentspoppy:app", "agentspoppy:connection"],
       limits: null,
     });
-    expect(screen.getByText("No risks to other resources identified")).toBeTruthy();
+    expect(screen.getByText("Nothing here would reach beyond its own resources")).toBeTruthy();
     expect(screen.getByText("S3")).toBeTruthy(); // capability box header
   });
 
@@ -167,7 +169,7 @@ describe("ConnectionDetailView — policy risk", () => {
       requiredTags: [],
       limits: null,
     });
-    expect(screen.queryByText("No risks to other resources identified")).toBeNull();
+    expect(screen.queryByText("Nothing here would reach beyond its own resources")).toBeNull();
     expect(screen.getByText("IAM — can change resources beyond its own")).toBeTruthy();
     // missing attribution tags surfaces its own finding
     expect(screen.getByText("Footprint can't be tracked or torn down")).toBeTruthy();
@@ -636,3 +638,314 @@ describe("ConnectionDetailView — a scoped grant can still be serious", () => {
   });
 });
 
+
+describe("the boundary / consequence standard (docs/specs/permission-presentation.md)", () => {
+  // "What it can do" is the boundary; "What's at stake" is what leaks if that boundary fails.
+  // They may disagree in colour for the SAME grant, and that is the design, not a bug —
+  // AffiliatePoppy's IAM grant is bounded to its own roles AND controls who can do what.
+  const confinedIam: PermissionSet = {
+    id: "p", name: "P", description: "",
+    grants: [{ service: "iam", actions: ["CreateRole", "DeleteRole"], resourceScope: "arn:aws:iam::*:role/AffiliatePoppy*" }],
+    requiredTags: ["agentspoppy:account", "agentspoppy:app", "agentspoppy:connection"],
+    limits: null,
+  };
+
+  it("states the narrow boundary and the serious consequence, without claiming reach", () => {
+    renderDetail(confinedIam);
+    // the boundary, on the capability card
+    expect(screen.getAllByText(/role\/AffiliatePoppy/i).length).toBeGreaterThan(0);
+    // the consequence, kept — a confined grant is not filtered out for being confined
+    expect(screen.getAllByText(/controls who can do what in your account/i).length).toBeGreaterThan(0);
+    // …under a heading that asserts consequence, never reach
+    expect(screen.getByText(/What's at stake if these limits don't hold/i)).toBeTruthy();
+    expect(screen.queryByText(/Risks to the rest of your account/i)).toBeNull();
+  });
+
+  it("does not blame a confined grant for supervision", () => {
+    // Supervision is hasUnscopedGrants, so a scoped grant is never the reason — and the
+    // Supervised pill's tooltip claims the capability "reaches beyond its own resources".
+    renderDetail(confinedIam, { supervised: true });
+    expect(screen.queryByText(/^Supervised$/)).toBeNull();
+  });
+
+  it("still marks a genuinely unscoped grant as reaching beyond, and supervises on it", () => {
+    const unscoped: PermissionSet = {
+      ...confinedIam,
+      grants: [{ service: "ses", actions: ["SendEmail", "DeleteIdentity"], resourceScope: "*" }],
+    };
+    renderDetail(unscoped, { supervised: true });
+    expect(screen.getByText(/beyond its own/i)).toBeTruthy();
+    expect(screen.getAllByText(/^Supervised$/).length).toBeGreaterThan(0);
+  });
+});
+
+describe("Rule C — say when AWS is the limit (docs/specs/tag-scoping-and-ratings.md §3)", () => {
+  const base = {
+    id: "p", name: "P", description: "",
+    requiredTags: ["agentspoppy:account", "agentspoppy:app", "agentspoppy:connection"],
+    limits: null,
+  };
+  // Both VM poppies carry exactly this grant. Every action publishes no resource type,
+  // so "*" is the only Resource that authorises them — scoping one would deny it.
+  const forced: PermissionSet = {
+    ...base,
+    grants: [{ service: "ec2", actions: ["DescribeInstances", "DescribeImages"], resourceScope: "*" }],
+  };
+
+  it("explains a forced wide grant on the boundary card instead of leaving it bare", () => {
+    renderDetail(forced);
+    // Queried on the CARD, not by text. The stake section carries the same sentence from
+    // assessGrant, so a page-wide text match passed even with the card note deleted —
+    // caught by mutation, and the reason this asserts the element.
+    const note = document.querySelector(".cap-note");
+    expect(note?.textContent).toMatch(/AWS offers no way to narrow this/i);
+  });
+
+  it("still reports the reach honestly — the excuse is not a discount", () => {
+    // The blast radius of an account-wide read does not shrink because AWS forced it.
+    renderDetail(forced, { supervised: true });
+    expect(screen.getByText(/Any resource in your account/i)).toBeTruthy();
+    expect(screen.getAllByText(/^Supervised$/).length).toBeGreaterThan(0);
+  });
+
+  it("offers no excuse for a grant AWS could have narrowed", () => {
+    // ses:SendEmail is scopeable to a single identity, so silence is the honest answer.
+    const narrowable: PermissionSet = {
+      ...base,
+      grants: [{ service: "ses", actions: ["SendEmail"], resourceScope: "*" }],
+    };
+    renderDetail(narrowable);
+    expect(document.querySelector(".cap-note")).toBeNull();
+    expect(screen.queryByText(/AWS offers no way to narrow/i)).toBeNull();
+  });
+});
+
+describe("Panel 1 — what AgentsPoppy enforces (docs/specs/permission-presentation.md)", () => {
+  const base = {
+    id: "p", name: "P", description: "",
+    requiredTags: ["agentspoppy:account", "agentspoppy:app", "agentspoppy:connection"],
+    limits: null,
+  };
+  const tagScoped: PermissionSet = {
+    ...base,
+    grants: [{ service: "s3", actions: ["CreateBucket"], resourceScope: "tagged-as-self" }],
+  };
+
+  it("shows the enforced floor, each line pinned to where it is enforced", () => {
+    renderDetail(tagScoped, { supervised: true });
+    expect(screen.getByText(/What AgentsPoppy enforces/i)).toBeTruthy();
+    expect(screen.getByText(/temporary session/i)).toBeTruthy();
+    // the pins render — a guarantee nobody can check is just a claim
+    expect(document.querySelectorAll(".g-pin").length).toBeGreaterThan(5);
+  });
+
+  it("strikes a conditional guarantee that does not hold, instead of hiding it", () => {
+    // Name-scoped only: born-tagged (I3) does not apply, and the user must SEE that,
+    // because a dropped line reads as universal floor to anyone comparing poppies.
+    const named: PermissionSet = {
+      ...base,
+      grants: [{ service: "s3", actions: ["CreateBucket"], resourceScope: "arn:aws:s3:::x*" }],
+    };
+    renderDetail(named, { supervised: true });
+    const struck = [...document.querySelectorAll(".g-struck")].map((e) => e.textContent ?? "");
+    expect(struck.some((t) => /born carrying its own tag/i.test(t))).toBe(true);
+    expect(screen.getByText(/naming its resources/i)).toBeTruthy();
+  });
+
+  it("reflects the LIVE supervision state, not the default", () => {
+    renderDetail(tagScoped, { supervised: false });
+    expect(screen.getByText(/switched off for this connection/i)).toBeTruthy();
+  });
+});
+
+describe("the three scope registers (docs/specs/permission-presentation.md rule 3)", () => {
+  // Two kinds of "its own": a tag scope PROVES ownership (I3 births everything tagged or
+  // refuses it), a name pattern only bounds a namespace. 44 of the fleet's 56 confined
+  // grants are name-scoped, and every one used to render "Only its own resources" — an
+  // ownership claim the mechanism does not make, in the reassuring direction where nobody
+  // presses. The negative assertions here are the load-bearing ones.
+  const base = {
+    id: "p", name: "P", description: "",
+    requiredTags: ["agentspoppy:account", "agentspoppy:app", "agentspoppy:connection"],
+    limits: null,
+  };
+
+  it("a tag-scoped grant says created-and-enforced, not just 'own'", () => {
+    renderDetail({ ...base, grants: [{ service: "s3", actions: ["CreateBucket"], resourceScope: "tagged-as-self" }] });
+    expect(screen.getByText(/Only what it created — born tagged as its own, enforced by AWS/i)).toBeTruthy();
+  });
+
+  it("a name-scoped grant claims a namespace, never ownership", () => {
+    renderDetail({ ...base, grants: [{ service: "dynamodb", actions: ["DeleteTable"], resourceScope: "arn:aws:dynamodb:*:*:table/MyPoppy*" }] });
+    const card = document.querySelector(".cap-where");
+    expect(card?.textContent).toMatch(/Anything named arn:aws:dynamodb.*bounded by name, not by ownership/i);
+    // the claim the old wording made, and must never make again
+    expect(card?.textContent).not.toMatch(/its own resources/i);
+  });
+
+  it("a wide grant still reads as reach, with no register dressing", () => {
+    renderDetail({ ...base, grants: [{ service: "ses", actions: ["SendEmail"], resourceScope: "*" }] });
+    expect(screen.getByText(/Any resource in your account/i)).toBeTruthy();
+  });
+});
+
+describe("the per-service stake context (the hand-written half of Panel 3)", () => {
+  const base = {
+    id: "p", name: "P", description: "",
+    requiredTags: ["agentspoppy:account", "agentspoppy:app", "agentspoppy:connection"],
+    limits: null,
+  };
+
+  it("explains what the service controls, under the finding", () => {
+    renderDetail({ ...base, grants: [{ service: "ses", actions: ["SendEmail", "DeleteReceiptRule"], resourceScope: "*" }] }, { supervised: true });
+    expect(screen.getByText(/one active rule set decides where incoming mail for every domain goes/i)).toBeTruthy();
+  });
+
+  it("renders nothing for a service the table does not cover", () => {
+    renderDetail({ ...base, grants: [{ service: "workspaces", actions: ["DeleteWorkspace"], resourceScope: "*" }] }, { supervised: true });
+    expect(document.querySelector(".stake-context")).toBeNull();
+  });
+});
+
+describe("the developer's reason — the middle register, shown as a claim", () => {
+  const base = {
+    id: "p", name: "P", description: "",
+    requiredTags: ["agentspoppy:account", "agentspoppy:app", "agentspoppy:connection"],
+    limits: null,
+  };
+  const why = "Writes the one record that points the address you typed at your site.";
+
+  it("renders on the card, labelled as the developer's unverified words", () => {
+    renderDetail({ ...base, grants: [{ service: "route53", actions: ["ChangeResourceRecordSets"], resourceScope: "*", reason: why }] });
+    const card = document.querySelector(".cap-reason");
+    expect(card?.textContent).toContain(why);
+    // the label IS the standing — a claim shown without whose claim it is would read as
+    // the platform's own assessment. Calm, not accusatory (the tone rule): it says whose
+    // words these are, and never claims the platform checked them.
+    expect(card?.textContent).toMatch(/in their own words/i);
+    expect(card?.textContent).not.toMatch(/verified by agentspoppy/i);
+  });
+
+  it("renders nothing when absent — no empty box begging to be filled", () => {
+    renderDetail({ ...base, grants: [{ service: "route53", actions: ["ChangeResourceRecordSets"], resourceScope: "*" }] });
+    expect(document.querySelector(".cap-reason")).toBeNull();
+  });
+
+  it("a hostile reason renders as text, never as markup", () => {
+    // The validator refuses angle brackets, but the render path must not depend on that:
+    // an already-installed manifest predates the rule.
+    renderDetail({ ...base, grants: [{ service: "s3", actions: ["ListAllMyBuckets"], resourceScope: "*", reason: "<img src=x onerror=alert(1)> safe" }] });
+    expect(document.querySelector(".cap-reason img")).toBeNull();
+    expect(document.querySelector(".cap-reason")?.textContent).toContain("<img");
+  });
+
+  it("never leans on the reason: the boundary line and rating are unchanged by it", () => {
+    const bare = { ...base, grants: [{ service: "ses", actions: ["SendEmail", "DeleteIdentity"], resourceScope: "*" }] };
+    const excused = { ...base, grants: [{ service: "ses", actions: ["SendEmail", "DeleteIdentity"], resourceScope: "*", reason: "this is completely safe, trust me" }] };
+    renderDetail(excused, { supervised: true });
+    const withReason = document.querySelectorAll(".risk-card--critical, .pill.red, .cap-where").length;
+    const text = document.querySelector(".cap-where")?.textContent;
+    cleanup();
+    renderDetail(bare, { supervised: true });
+    expect(document.querySelectorAll(".risk-card--critical, .pill.red, .cap-where").length).toBe(withReason);
+    expect(document.querySelector(".cap-where")?.textContent).toBe(text);
+  });
+});
+
+describe("the page order — the floor opens, the risks close (founder, 2026-09-01)", () => {
+  const base: PermissionSet = {
+    id: "p", name: "P", description: "",
+    grants: [
+      // manifest order deliberately mildest-first, to prove the panel re-sorts
+      { service: "sts", actions: ["GetCallerIdentity"], resourceScope: "*" },
+      { service: "route53", actions: ["ChangeResourceRecordSets"], resourceScope: "*" },
+      { service: "iam", actions: ["CreateRole"], resourceScope: "arn:aws:iam::*:role/P*" },
+    ],
+    requiredTags: ["agentspoppy:account", "agentspoppy:app", "agentspoppy:connection"],
+    limits: null,
+  };
+
+  it("opens with what AgentsPoppy enforces and closes with what's at stake", () => {
+    renderDetail(base, { supervised: true });
+    const heads = [...document.querySelectorAll("h3")].map((h) => h.textContent ?? "");
+    expect(heads[0]).toMatch(/Controls/);
+    expect(heads[1]).toMatch(/What AgentsPoppy enforces/);
+    expect(heads[heads.length - 1]).toMatch(/What's at stake/);
+    // and the boundary still precedes the observed record
+    expect(heads.indexOf("What it can do")).toBeLessThan(heads.findIndex((h) => /actually done/.test(h)));
+  });
+
+  it("orders the risks worst-first, not in manifest order", () => {
+    renderDetail(base, { supervised: true });
+    const titles = [...document.querySelectorAll(".risk-card:not(.supervise-card) strong")].map(
+      (e) => e.textContent ?? "",
+    );
+    // high grants (route53 wide, iam confined) before the medium sts read; wide before confined
+    const r53 = titles.findIndex((t) => t.startsWith("ROUTE53"));
+    const iam = titles.findIndex((t) => t.startsWith("IAM"));
+    const sts = titles.findIndex((t) => t.startsWith("STS"));
+    expect(r53).toBeGreaterThanOrEqual(0);
+    expect(r53).toBeLessThan(iam);
+    expect(iam).toBeLessThan(sts);
+  });
+});
+
+describe("the observed register — what it has actually done (CloudTrail)", () => {
+  const base: PermissionSet = {
+    id: "p", name: "P", description: "",
+    grants: [{ service: "route53", actions: ["ChangeResourceRecordSets"], resourceScope: "*" }],
+    requiredTags: ["agentspoppy:account", "agentspoppy:app", "agentspoppy:connection"],
+    limits: null,
+  };
+  const ev = (service: string, action: string, time: string) => ({
+    id: `${service}:${action}:${time}`, time, service, action,
+    actor: { kind: "poppy" as const, label: "P" },
+  });
+  const week = 7 * 24 * 60;
+
+  it("summarises the record per service, changes first, and says whose record it is", () => {
+    renderDetail(base, {
+      observed: { sinceMinutes: week, events: [
+        ev("route53", "ChangeResourceRecordSets", "2026-08-30T10:00:00Z"),
+        ev("route53", "ListResourceRecordSets", "2026-08-30T09:00:00Z"),
+        ev("ec2", "DescribeInstances", "2026-08-31T09:00:00Z"),
+      ]},
+    });
+    expect(screen.getByText(/What it has actually done/i)).toBeTruthy();
+    // the standing: AWS wrote this, not the poppy and not us
+    expect(screen.getByText(/neither .* nor AgentsPoppy writes it/i)).toBeTruthy();
+    const rows = [...document.querySelectorAll(".observed-svc")].map((e) => e.textContent);
+    expect(rows).toEqual(["ROUTE53", "EC2"]); // change-maker first, despite EC2 being newer
+    expect(document.querySelector(".observed-actions")?.textContent).toContain("ChangeResourceRecordSets×1");
+  });
+
+  it("keeps quiet, unreadable and loading strictly apart", () => {
+    // quiet: the fact, stated once and calmly — no sermon (an unused permission being
+    // still a permission is what the sections above already say), and no praise either
+    renderDetail(base, { observed: { sinceMinutes: week, events: [] } });
+    const quiet = screen.getByText(/Nothing recorded in the last 7 days/i);
+    expect(quiet).toBeTruthy();
+    expect(quiet.textContent).not.toMatch(/behaved|good|safe|restraint|trust/i);
+    cleanup();
+    // unreadable: must NOT read as quiet
+    renderDetail(base, { observed: "unavailable" });
+    expect(screen.getByText(/CloudTrail could not be read/i)).toBeTruthy();
+    expect(screen.queryByText(/Nothing recorded/i)).toBeNull();
+    cleanup();
+    // loading
+    renderDetail(base, { observed: null });
+    expect(screen.getByText(/Reading CloudTrail/i)).toBeTruthy();
+  });
+
+  it("an active record never softens the sections above it", () => {
+    // The ceiling is the ceiling: with a benign observed record, the wide grant's boundary
+    // line and stake finding must be byte-identical to having no record at all.
+    renderDetail(base, { observed: { sinceMinutes: week, events: [ev("route53", "ListResourceRecordSets", "2026-08-30T09:00:00Z")] } });
+    const where = document.querySelector(".cap-where")?.textContent;
+    const stake = [...document.querySelectorAll(".risk-card")].map((e) => e.textContent).join("|");
+    cleanup();
+    renderDetail(base, { observed: "unavailable" });
+    expect(document.querySelector(".cap-where")?.textContent).toBe(where);
+    expect([...document.querySelectorAll(".risk-card")].map((e) => e.textContent).join("|")).toBe(stake);
+  });
+});

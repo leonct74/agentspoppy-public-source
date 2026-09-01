@@ -1,7 +1,9 @@
 # Tag-scoping that works, and a rating that reflects it
 
-**Status:** §1, §2 and Rule B's prerequisite are IMPLEMENTED and committed (unreleased). §3's
-Rules A and C are not.
+**Status:** §1, §2 and Rule B's prerequisite are IMPLEMENTED and **RELEASED** (AgentsPoppy 0.3.10,
+VpnPoppy 0.1.10, VmPoppy 0.1.15 — all live, 2026-08-31). **Rule C is implemented, unreleased** —
+it is host-side, so it ships with the next host version. Rule A is still blocked (§2b) and Rule B
+still waits on fault-A step 3.
 
 **Why now.** The founder's requirement, verbatim: *"we need to maintain the promise that we tag
 and remove whatever we can, and when that happens the risk cannot be red."* Both halves of that
@@ -238,6 +240,35 @@ is exactly the case Rule C exists to explain.
 
 ---
 
+## 2d. SHIPPED (2026-08-31)
+
+| what | version | where |
+| --- | --- | --- |
+| AgentsPoppy (the compiler fix) | 0.3.10 | agentspoppy.com/download — macOS universal + Linux AppImage |
+| VpnPoppy | 0.1.10 | catalogue, `minHost: 0.3.10` |
+| VmPoppy | 0.1.15 | catalogue, `minHost: 0.3.10` |
+
+**`minHost: 0.3.10` on those two is load-bearing, not hygiene.** The tag condition is compiled by
+the HOST. A pre-0.3.10 host emits the shape that puts `ec2:RunInstances` behind `aws:ResourceTag`,
+which a resource being born can never satisfy — so offering this update to an older host would deny
+every launch. They are the only two entries in the catalogue not on `0.3.1`.
+
+Every published asset was fetched **unauthenticated** and hash-matched against what was packaged
+before its checksum was written anywhere.
+
+Windows shipped as the Store MSIX only (`AgentsPoppy_0.3.10_x64.msix`, package version `0.3.10.0`,
+awaiting Partner Center submission). The unsigned NSIS `.exe` was deliberately not published as a
+download, and Windows is deliberately absent from `latest.json` — including it makes Store-installed
+copies try to install the NSIS package over themselves, which was the v0.2.6 bug. The absence is
+asserted programmatically, not eyeballed.
+
+**Still outstanding:** the macOS human smoke test (download in a browser, install, launch from
+Finder, connect AWS). No scripted check substitutes for it — the v0.2.0 broker crash passed every
+automated gate and appeared only on quarantined copies. The equivalent gate DID run for Linux and
+Windows, whose CI workflows start the broker and require an HTTP answer.
+
+---
+
 ## 3. What red should mean
 
 The audit found four unrelated situations sharing one colour:
@@ -322,24 +353,77 @@ For certification to be worth showing it needs three things it does not have: to
 to be **enforced at listing** rather than by habit, and to be an **artifact the user can see**.
 That is its own piece of work.
 
-### Rule C — say when AWS is the limit
+### Rule C — say when AWS is the limit — IMPLEMENTED (2026-08-31)
 
-Twenty of MailPoppy's actions cannot be narrowed by any policy we could write — thirteen SES actions
-(the whole receipt-rule API, `GetAccount`, `PutAccountDetails`) support no resource-level permission
-of any kind, per AWS's published service reference. The screen has no way to say so, and silence
-reads as negligence. A distinct state — *AWS provides no way to narrow this* — is honest and costs
-no security.
+Some AWS actions cannot be narrowed by any policy anyone could write: AWS publishes no resource
+types for them, so `Resource: "*"` is the only value that authorises them. The screen had no way to
+say so, and silence read as negligence. There is now a distinct state — *AWS offers no way to
+narrow this* — on the capability card and in the reason.
+
+**The claim was verified live before any of it was written** (sandbox account,
+`iam:simulate-custom-policy`, with both a positive and a negative control so the run distinguishes
+something — a uniformly-denied run proves nothing):
+
+| action | policy scope | decision | |
+| --- | --- | --- | --- |
+| `ec2:StopInstances` | `instance/*` | **allowed** | positive control |
+| `ec2:StopInstances` | `volume/*` | `implicitDeny` | negative control |
+| `ec2:DescribeInstances` | `instance/*` | **`implicitDeny`** | forced — scoping DENIES it |
+| `ec2:DescribeInstances` | `"*"` | **allowed** | forced — only `*` works |
+| `ses:SendEmail` | `identity/*` | **allowed** | narrowable, so NOT forced |
+| `ses:CreateReceiptRule` | `receipt-rule/*` | `implicitDeny` | |
+| `ses:CreateReceiptRule` | `"*"` | allowed | |
+| `pricing:GetProducts` | any ARN | `implicitDeny` | |
+
+An earlier attempt to settle this with `accessanalyzer validate-policy` returned NO-FINDINGS for
+forced and narrowable actions alike — it distinguishes nothing here, so it was discarded as
+evidence rather than reported as support.
+
+**The table is generated, never curated.** `packages/core/scripts/gen-forced-actions.mjs` reads
+AWS's own service reference (`servicereference.us-east-1.amazonaws.com`, schema v1.4) and emits
+`packages/core/src/generated/awsForcedActions.ts` — 455 services, 6,607 forced actions, 150 KB.
+Hand-writing it is precisely how `NAMED_BIRTHS` went wrong in §2b, and it fails the same way:
+silently, in the flattering direction. `npm run check:forced-actions -w @agentspoppy/core` fails if
+the table has drifted from AWS, and a partial fetch **refuses to write** rather than silently
+deleting services (a missing service would turn "AWS is the limit" back into silence).
+
+**All-or-nothing per grant, and this is the load-bearing decision.** Rule C fires only when EVERY
+action in the grant is forced. MailPoppy's SES grant mixes 13 forced actions with 6 AWS can narrow
+perfectly well — `SendEmail` scopes to a single identity — so excusing the grant wholesale would
+launder those six. Verified by the `ses:SendEmail` row above, not by reading the docs.
+
+**It changes wording only.** Level and `scoped` are untouched, so an account-wide read still rates
+`medium` and still forces supervision: the reach is the same whoever chose it. Rule C is an
+explanation, never a discount. Mutation-tested — making it lower the level, fire on a mixed grant,
+fire on an empty grant, or drop off the card each turns the suite red.
+
+**Where it fires across the fleet today:**
+
+| poppy | grant | Rule C |
+| --- | --- | --- |
+| VpnPoppy, VmPoppy | `ec2:Describe*` | **yes** — the case §2c left outstanding |
+| LiveOpsPoppy | `pricing:GetProducts` | **yes** |
+| HostingPoppy | `amplify:ListApps`, `route53:List*` | **yes** |
+| MailPoppy | `s3:ListAllMyBuckets`, `sts:GetCallerIdentity` | **yes** |
+| VpnPoppy | `cloudwatch:GetMetricData` | no — narrowable to a dataset |
+| MailPoppy | `ses`, `cognito-idp`, `route53`, `guardduty`, `cloudformation` | no — mixed |
+
+**Follow-up this surfaced, for the poppies rather than the host.** Five MailPoppy grants are mixed,
+so a genuinely narrowable half is sitting at `*`: `cognito-idp` (7 of 8 scope to a `userpool`),
+`ses` (6 of 19, incl. `SendEmail` → `identity`), `route53` (2 of 3 → `hostedzone`), `guardduty`
+(6 of 8) and `cloudformation` (1 of 2). Splitting each into a forced grant plus a scoped one would
+shrink real blast radius — a poppy change, not a rating change.
 
 ---
 
 ## 4. Order of work
 
-1. Fix the compiler (§2), with the birth-action table and the refuse-to-guess guard.
-2. Prove `RunInstances` live in the sandbox — one launch, one terminate.
-3. Switch VpnPoppy and VmPoppy to `TAGGED_AS_SELF`; they become the first fully attributable poppies.
-4. Rule A in the assessor, so that fact reaches the screen.
+1. ✅ Fix the compiler (§2), with the birth-action table and the refuse-to-guess guard.
+2. ✅ Prove `RunInstances` live in the sandbox.
+3. ✅ Switch VpnPoppy and VmPoppy to `TAGGED_AS_SELF`; the first fully attributable poppies.
+4. Rule A in the assessor, so that fact reaches the screen. **Blocked on §2b's wording fix.**
 5. Rule B, gated on step 3 of broker-role-v2.
-6. Rule C wording.
+6. ✅ Rule C wording.
 
 Steps 1–3 are the promise. Steps 4–6 are the screen telling the truth about it.
 

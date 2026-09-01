@@ -4,7 +4,7 @@
 import { describe, it, expect } from "vitest";
 import { TAGGED_AS_SELF } from "@agentspoppy/core";
 import type { ExtensionManifest } from "./manifest";
-import { parseManifest, validateManifest, effectiveRuntime, effectiveIsolation } from "./manifest";
+import { parseManifest, validateManifest, effectiveRuntime, effectiveIsolation, GRANT_REASON_MAX } from "./manifest";
 
 /** A realistic, valid manifest (MailPoppy-shaped) reused across cases. */
 function validManifest(): ExtensionManifest {
@@ -170,5 +170,49 @@ describe("confinement defaults (0.3.5)", () => {
       backend: { entry: "backend/bin", runtime: "native", isolation: "none" },
     });
     expect(declared.ok).toBe(true);
+  });
+});
+
+describe("a grant's optional `reason` (docs/specs/permission-presentation.md)", () => {
+  // AGENTS.md has asked developers for this since the Cognito child-create recipe; two poppies
+  // wrote one and the field did not exist, so the host silently dropped it. Now it is modelled,
+  // and because it is developer text on a security screen it is checked when present.
+  const withReason = (reason: unknown) => ({
+    id: "com.example.app", name: "ExamplePoppy", version: "0.1.0", description: "d",
+    permissionSet: {
+      id: "x", name: "x", description: "d", requiredTags: [], limits: null,
+      grants: [{ service: "s3", actions: ["ListBucket"], resourceScope: "*", reason }],
+    },
+    frontend: { entry: "frontend/index.html" },
+    capabilities: [],
+  });
+
+  it("accepts a real one, and survives the round trip", () => {
+    const why = "Pool ids are generated, so creates cannot be name-scoped narrower.";
+    const r = validateManifest(withReason(why));
+    expect(r.ok).toBe(true);
+    expect(parseManifest(JSON.stringify(withReason(why))).permissionSet.grants[0].reason).toBe(why);
+  });
+
+  it("is optional — omitting it is not an error", () => {
+    const m = withReason(undefined);
+    delete (m.permissionSet.grants[0] as { reason?: unknown }).reason;
+    expect(validateManifest(m).ok).toBe(true);
+  });
+
+  it("rejects an empty or non-string reason rather than showing a blank line", () => {
+    expect(validateManifest(withReason("   ")).ok).toBe(false);
+    expect(validateManifest(withReason(42)).ok).toBe(false);
+  });
+
+  it("caps the length — this text lands on the approval screen", () => {
+    expect(validateManifest(withReason("x".repeat(GRANT_REASON_MAX))).ok).toBe(true);
+    expect(validateManifest(withReason("x".repeat(GRANT_REASON_MAX + 1))).ok).toBe(false);
+  });
+
+  it("refuses markup, so a manifest cannot dress a claim up as interface", () => {
+    const r = validateManifest(withReason("safe <b>trust me</b>"));
+    expect(r.ok).toBe(false);
+    expect(r.errors.some((e) => e.includes("plain text"))).toBe(true);
   });
 });

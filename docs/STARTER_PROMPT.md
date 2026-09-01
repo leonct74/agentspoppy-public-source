@@ -33,6 +33,15 @@ Non-negotiable rules (from AGENTS.md):
   (MailPoppy is the reference), and a directory listing requires the icon.
 - Your poppy may only ever touch AWS resources IT created. Any grant that changes or deletes an
   existing resource must be scoped to "tagged-as-self" or a name/ARN pattern you own — NEVER "*".
+  Prefer "tagged-as-self": it PROVES ownership (AWS refuses an untagged create), where a name
+  pattern only bounds a namespace.
+- Any grant that is NOT confined to your own resources must carry a plain-language "reason" saying
+  what you use it for and why it cannot be narrower — the approval screen shows the user what the
+  permission would allow if you were malicious, and your "reason" is the only thing that can say
+  what it is actually FOR. `npm run validate-manifest` fails until every one has it.
+- Never leave a narrowable action sitting at "*" because a forced one shares its grant. Some AWS
+  actions genuinely cannot be scoped (ec2:Describe*, sts:GetCallerIdentity); most can. Split them
+  into two grants and scope the half that supports it.
 - Least privilege: declare the specific actions you need, not "service:*". Tag everything you
   create so it's attributable and tear-down-able. Never request admin.
 - CONFINED FROM THE USER'S FILES — mandatory, and a listing requirement (an unconfined backend is

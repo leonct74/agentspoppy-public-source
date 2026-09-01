@@ -309,6 +309,10 @@ export async function handle(
       if (!action) {
         if (method === "GET") return send(res, 200, await service.getConnection(id));
         if (method === "DELETE") return send(res, 200, await service.revoke(id));
+      } else if (action === "activity" && method === "GET") {
+        // The observed register: what this poppy has actually done (CloudTrail, app-keyed).
+        const sinceMinutes = Number(url.searchParams.get("sinceMinutes")) || undefined;
+        return send(res, 200, await service.getConnectionActivity(id, { sinceMinutes }));
       } else if (method === "POST") {
         switch (action) {
           case "approve":

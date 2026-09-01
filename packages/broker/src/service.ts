@@ -860,6 +860,35 @@ export class BrokerService {
     return { events, summary: summarizeActivity(events) };
   }
 
+  /**
+   * What one poppy has actually done, from CloudTrail: the events attributed to the
+   * connection's APP — keyed to the app rather than the connection id on purpose, since a
+   * connection is superseded on scope drift (registry.reconcile) while the poppy and its
+   * history continue. Without that, every re-approval would wipe the observed record at
+   * exactly the moment the user is re-deciding.
+   *
+   * The default window is 7 days (the account feed's 24 h is about "what just happened";
+   * this register is about "what does this poppy DO"). Raw events out — the pure
+   * summariser lives in core (summarizeObserved) so every surface counts identically.
+   *
+   * Honest limit, stated where it is rendered rather than solved here: the CloudTrail
+   * provider swallows per-region failures, so an empty result cannot distinguish a quiet
+   * poppy from an unreadable trail.
+   */
+  async getConnectionActivity(
+    id: string,
+    opts: { sinceMinutes?: number; limit?: number } = {},
+  ): Promise<{ events: ActivityEvent[]; sinceMinutes: number }> {
+    const target = await this.getConnection(id);
+    const sinceMinutes = opts.sinceMinutes ?? 7 * 24 * 60;
+    const report = await this.getActivity({ sinceMinutes, limit: opts.limit ?? 250 });
+    const appOf = new Map((await this.store.listConnections()).map((c) => [c.id, c.app.id]));
+    const events = report.events.filter(
+      (e) => e.actor.kind === "poppy" && e.actor.connectionId && appOf.get(e.actor.connectionId) === target.app.id,
+    );
+    return { events, sinceMinutes };
+  }
+
   // --- internals ---
 
   /**

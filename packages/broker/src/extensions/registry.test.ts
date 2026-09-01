@@ -52,6 +52,19 @@ describe("grantsSignature", () => {
     expect(a).toBe(reordered);
     expect(a).not.toBe(rescoped);
   });
+
+  it("ignores a grant's `reason` — consent is about capability, not about prose", () => {
+    // Load-bearing in both directions. If `reason` were in the signature, every poppy adding
+    // one (now required on unconfined grants, AGENTS.md §3) would supersede its connection and
+    // drag the whole fleet's users through a fresh approval for a documentation change. And a
+    // reason must never be able to BUY consent either: the text is the developer's claim, the
+    // scope beside it is what the user is actually approving.
+    const bare = [{ service: "s3", actions: ["Get"], resourceScope: "*" }];
+    const explained = [{ service: "s3", actions: ["Get"], resourceScope: "*", reason: "why it must be wide" }];
+    const reworded = [{ service: "s3", actions: ["Get"], resourceScope: "*", reason: "a completely different claim" }];
+    expect(grantsSignature(explained)).toBe(grantsSignature(bare));
+    expect(grantsSignature(reworded)).toBe(grantsSignature(explained));
+  });
 });
 
 describe("ExtensionRegistry.reconcile", () => {

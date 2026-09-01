@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ApprovalRequest, AuditEntry, ConnectedAccount, Connection, InfraGraph, Inventory, ResidualResource } from "@agentspoppy/core";
 import { assessPermissionSet } from "@agentspoppy/core";
-import { ApiError, broker, type ActivityReport, type ExtensionRuntimeState } from "./api/broker";
+import { ApiError, broker, type ActivityReport, type ConnectionActivityReport, type ExtensionRuntimeState } from "./api/broker";
 import { groupConnectionsByAccount } from "./lib/format";
 import { brokerRoleArnFor } from "./lib/brokerRole";
 import { initApprovalActions, notifyPendingApprovals } from "./lib/notify";
@@ -709,6 +709,11 @@ function DetailContainer({
   // A blanket "can't read this AWS account" (invalid/expired operator creds, or missing read
   // permissions) — surfaced as a banner so a credentials problem never masquerades as an empty map.
   const [infraError, setInfraError] = useState<string | null>(null);
+  // The observed register: what this poppy has actually done (CloudTrail, 7-day window).
+  // Loads independently and best-effort — LookupEvents is slow and may be unreadable, and
+  // neither must hold up or break the detail view. null while loading, "unavailable" on
+  // failure: the view must distinguish "quiet" from "could not read the trail".
+  const [observed, setObserved] = useState<ConnectionActivityReport | "unavailable" | null>(null);
   const [error, setError] = useState<string | null>(null);
   // A one-off result notice (e.g. what a teardown actually removed). Distinct from
   // `error`, which replaces the whole view; this sits inline above the controls.
@@ -729,6 +734,17 @@ function DetailContainer({
   // poll effect below runs fast while there's movement and backs off when all is quiet,
   // so an idle open view doesn't hammer AWS with Describe calls all day (which would
   // also pollute the very CloudTrail activity this app shows the user).
+  // One-shot per connection: the observed register (slow, informational).
+  useEffect(() => {
+    let gone = false;
+    setObserved(null);
+    broker
+      .connectionActivity(id)
+      .then((r) => { if (!gone) setObserved(r); })
+      .catch(() => { if (!gone) setObserved("unavailable"); });
+    return () => { gone = true; };
+  }, [id]);
+
   const fingerprints = useRef<Record<string, string>>({});
   const lastChangeAt = useRef(Date.now());
   const tearingDownRef = useRef(false);
@@ -912,6 +928,7 @@ function DetailContainer({
       connection={connection}
       inventory={inventory}
       audit={audit}
+      observed={observed}
       infra={infra}
       infraLoading={infraLoading}
       infraError={infraError}

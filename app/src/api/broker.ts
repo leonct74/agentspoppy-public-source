@@ -40,6 +40,12 @@ export interface SetupVersionStatus {
   reason?: string;
 }
 
+/** One poppy's observed activity: raw events (summarised in the view via core) + the window. */
+export interface ConnectionActivityReport {
+  events: ActivityEvent[];
+  sinceMinutes: number;
+}
+
 /** Recent account activity, attributed (external = did not go through AgentsPoppy). */
 export interface ActivityReport {
   events: ActivityEvent[];
@@ -273,6 +279,9 @@ export const broker = {
   listAccounts: () => req<ConnectedAccount[]>("/accounts"),
   listConnections: () => req<Connection[]>("/connections"),
   activity: () => req<ActivityReport>("/activity"),
+  /** The observed register: what this poppy has actually done (CloudTrail, app-keyed, 7-day window). */
+  connectionActivity: (id: string) =>
+    req<ConnectionActivityReport>(`/connections/${encodeURIComponent(id)}/activity`),
   // --- bootstrap ---
   awsIdentity: () => req<CallerIdentity>("/aws/identity"),
   /** In-app key entry: save pasted keys to the `agentspoppy` profile, get back the resolved identity. */

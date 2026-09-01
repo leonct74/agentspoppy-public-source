@@ -14,6 +14,7 @@
  */
 import { TAGGED_AS_SELF } from "./types";
 import { grantHasReferencedLeg } from "./birthActions";
+import { grantCannotBeNarrowed } from "./awsNarrowing";
 import type { ConnectedAccount, Connection, PermissionGrant, PermissionSet } from "./types";
 
 /** The tag keys AgentsPoppy stamps on every brokered resource (for attribution). */
@@ -304,8 +305,14 @@ export function describeGrant(grant: PermissionGrant): string {
   const where = grantIsTagScoped(grant)
     ? "only resources tagged as its own"
     : scopeIsUnbounded(grant.resourceScope, grant.service)
-      ? "any resource"
-      : `resources matching ${grant.resourceScope}`;
+      ? // Rule C: the boundary is genuinely "everything", but a reader deserves to know
+        // whether that was a choice. It is not, when AWS publishes no way to narrow it.
+        grantCannotBeNarrowed(grant)
+        ? "any resource (AWS offers no way to narrow this)"
+        : "any resource"
+      : // Rule 3's register for a name scope: it bounds a namespace without proving
+        // ownership, so the line must not read as "its own".
+        `anything named ${grant.resourceScope}`;
   return `Can ${verb} ${grant.service.toUpperCase()} — ${where}.`;
 }
 
@@ -394,36 +401,51 @@ export function assessGrant(grant: PermissionGrant): GrantRisk {
   // account. A single grant can do several of these things at once, so the reason has
   // to be able to say so.
   if (unbounded) {
-    const alsoSecrets = secrets ? ` It can also read the CONTENTS of any ${svc} secret.` : "";
+    const alsoSecrets = secrets ? ` It can also read the contents of any ${svc} secret.` : "";
+
+    // Rule C — say when AWS is the limit. Some actions publish no resource types at
+    // all, so `Resource: "*"` is the only grant that authorises them; scoping one
+    // DENIES it (proven live — see awsNarrowing.ts). Where that is true of every
+    // action in the grant, "not just its own" is an accusation the developer cannot
+    // answer, and silence about it reads as negligence.
+    //
+    // It changes the WORDING ONLY. The level and `scoped` are untouched, so an
+    // account-wide read still rates medium and still forces supervision: the reach is
+    // the same whoever chose it.
+    const awsLimit = grantCannotBeNarrowed(grant);
+    const beyondOwn = awsLimit ? "" : " — not just its own";
+    const awsNote = awsLimit
+      ? ` AWS offers no way to narrow this: ${grant.actions.length === 1 ? "this action accepts" : "these actions accept"} no resource limit at all, so this is the tightest form the grant can take.`
+      : "";
     if (mutates && (grantCanDestroy(grant) || controlPlane)) {
       return {
         level: "high",
         scoped: false,
-        reason: `Can create, change and delete ANY ${svc} resource in your account — not just its own.${alsoSecrets}`,
+        reason: `Can create, change and delete any ${svc} resource in your account${beyondOwn}.${alsoSecrets}${awsNote}`,
       };
     }
     if (grantCanLaunchUntracked(grant)) {
       return {
         level: "high",
         scoped: false,
-        reason: `Can start up new ${svc} resources anywhere in your account — and because they are not tagged as they are created, AgentsPoppy cannot show you or remove them afterwards.${alsoSecrets}`,
+        reason: `Can start up new ${svc} resources anywhere in your account — and because they are not tagged as they are created, AgentsPoppy cannot show you or remove them afterwards.${alsoSecrets}${awsNote}`,
       };
     }
     if (mutates) {
       return {
         level: secrets ? "high" : "medium",
         scoped: false,
-        reason: `Can create new ${svc} resources in your account, but cannot change or delete anything that already exists.${alsoSecrets}`,
+        reason: `Can create new ${svc} resources in your account, but cannot change or delete anything that already exists.${alsoSecrets}${awsNote}`,
       };
     }
     if (secrets) {
       return {
         level: "high",
         scoped: false,
-        reason: `Can read the CONTENTS of any ${svc} secret in your account — not just its own.`,
+        reason: `Can read the contents of any ${svc} secret in your account${beyondOwn}.${awsNote}`,
       };
     }
-    return { level: "medium", scoped: false, reason: `Can read ANY ${svc} resource in your account — not just its own.` };
+    return { level: "medium", scoped: false, reason: `Can read any ${svc} resource in your account${beyondOwn}.${awsNote}` };
   }
 
   // Confined to the app's OWN resources — by tag (it created them) or by a name
@@ -455,7 +477,7 @@ export function assessGrant(grant: PermissionGrant): GrantRisk {
       reason: `Can create, change and delete ${svc} identities and permissions ${where} — this controls who can do what in your account.`,
     };
   }
-  const alsoSecrets = secrets ? ` It can also read the CONTENTS of those ${svc} secrets.` : "";
+  const alsoSecrets = secrets ? ` It can also read the contents of those ${svc} secrets.` : "";
   return mutates
     ? {
         level: "medium",
@@ -466,7 +488,7 @@ export function assessGrant(grant: PermissionGrant): GrantRisk {
       ? {
           level: "medium",
           scoped: true,
-          reason: `Can read the CONTENTS of ${svc} secrets ${where} — not just their names.`,
+          reason: `Can read the contents of ${svc} secrets ${where} — not just their names.`,
         }
       : { level: "low", scoped: true, reason: `Can read only ${svc} resources ${where}.` };
 }

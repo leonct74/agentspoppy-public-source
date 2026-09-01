@@ -301,6 +301,46 @@ describe("BrokerService", () => {
     expect(report.events.find((e) => e.id === "e2")?.actor.label).toBe("MailPoppy");
   });
 
+  it("getConnectionActivity keys on the APP, so history survives a superseded connection", async () => {
+    // A connection is revoked and recreated whenever the declared scope drifts
+    // (registry.reconcile). The poppy and its history continue, so the observed register
+    // must follow the app — otherwise every re-approval would wipe the record at exactly
+    // the moment the user is re-deciding.
+    let oldId = "", otherId = "";
+    const activity: ActivityProvider = {
+      async recentActivity() {
+        return [
+          { id: "e1", time: "2026-01-02T00:00:00Z", service: "route53", action: "ChangeResourceRecordSets",
+            actor: { kind: "poppy", label: "Connected app", connectionId: oldId } },
+          { id: "e2", time: "2026-01-01T00:00:00Z", service: "s3", action: "CreateBucket",
+            actor: { kind: "poppy", label: "Connected app", connectionId: otherId } },
+          { id: "e3", time: "2026-01-01T00:00:00Z", service: "iam", action: "DeleteUser",
+            actor: { kind: "external", label: "IAM user deploy-bot" } },
+        ];
+      },
+    };
+    const s = new BrokerService({
+      store: new Store(), credentials: new StubCredentialVendor(), cloud: new StubCloudProvider(),
+      aws: new StubAwsBootstrap(), activity,
+    });
+    const account = await s.linkAccount({ accountId: "123456789012", regions: ["eu-west-1"] });
+    const old = await s.requestConnection({ accountId: account.id, app, permissionSet });
+    oldId = old.id;
+    const other = await s.requestConnection({
+      accountId: account.id, app: { id: "com.other.app", name: "OtherPoppy" }, permissionSet,
+    });
+    otherId = other.id;
+    // supersede: revoke the old connection, request a fresh one for the SAME app
+    await s.revoke(old.id);
+    const fresh = await s.requestConnection({ accountId: account.id, app, permissionSet });
+
+    const r = await s.getConnectionActivity(fresh.id);
+    // e1 belongs to this app (via its superseded connection); e2 is another poppy; e3 external
+    expect(r.events.map((e) => e.id)).toEqual(["e1"]);
+    expect(r.sinceMinutes).toBe(7 * 24 * 60);
+    await expect(s.getConnectionActivity("nope")).rejects.toMatchObject({ code: "not_found" });
+  });
+
   it("getActivity attributes the operator by its LIVE identity, not the canonical name", async () => {
     // Real users connect with an IAM user of their own naming (e.g. acmepoppy-3);
     // attribution must follow the actual caller or the broker's own calls (deploys,
