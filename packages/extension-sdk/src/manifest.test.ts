@@ -246,3 +246,52 @@ describe("network egress declaration (spec: network-egress.md phase 1)", () => {
     expect(validateManifest(m).ok).toBe(false);
   });
 });
+
+describe("compliance declaration (spec: compliance-dossier.md)", () => {
+  const withCompliance = (compliance: unknown): unknown => ({ ...validManifest(), compliance });
+
+  it("is optional — a manifest without it stays valid (declare-then-require rollout)", () => {
+    expect(validateManifest(validManifest()).ok).toBe(true);
+  });
+
+  it("accepts the full three-field shape, subprocessors included", () => {
+    const r = validateManifest(
+      withCompliance({
+        dataHandled: "Mail content and metadata, stored only in your own AWS account.",
+        subprocessors: [
+          { name: "mailpoppy.com", operator: "Olly Digital", purpose: "mobile-access configuration", dataShared: "domain name and entitlement status — never mail content" },
+        ],
+        securityContact: "security@example.com",
+      }),
+    );
+    expect(r).toEqual({ ok: true, errors: [] });
+  });
+
+  it('accepts an EMPTY subprocessors list — the "no user data leaves your cloud" declaration', () => {
+    const r = validateManifest(withCompliance({ dataHandled: "Nothing beyond your own cloud.", subprocessors: [], securityContact: "https://example.com/security" }));
+    expect(r.ok).toBe(true);
+  });
+
+  it("a malformed declaration is an ERROR, never rendered — a typo may not buy a garbage dossier", () => {
+    expect(validateManifest(withCompliance("yes")).ok).toBe(false);
+    expect(validateManifest(withCompliance({ dataHandled: "", subprocessors: [], securityContact: "security@example.com" })).ok).toBe(false);
+    // subprocessors must be STATED, not omitted — [] is a deliberate claim.
+    const noSubs = validateManifest(withCompliance({ dataHandled: "x", securityContact: "security@example.com" }));
+    expect(noSubs.ok).toBe(false);
+    expect(noSubs.errors.join(" ")).toContain("subprocessors must be an array");
+  });
+
+  it("rejects a subprocessor entry missing its data description, naming the index", () => {
+    const r = validateManifest(
+      withCompliance({ dataHandled: "x", subprocessors: [{ name: "api.example.com", purpose: "sync" }], securityContact: "security@example.com" }),
+    );
+    expect(r.ok).toBe(false);
+    expect(r.errors.join(" ")).toContain("subprocessors[0].dataShared");
+  });
+
+  it("securityContact must be an email or https URL — http and prose are refused", () => {
+    for (const bad of ["http://example.com/security", "ask in the forum", ""]) {
+      expect(validateManifest(withCompliance({ dataHandled: "x", subprocessors: [], securityContact: bad })).ok).toBe(false);
+    }
+  });
+});

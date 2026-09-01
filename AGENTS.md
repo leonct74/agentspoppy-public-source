@@ -352,6 +352,31 @@ platform patches touching its enforcement points are checked against that docume
   is no list to refuse against), it is logged, and it is reviewed hard. It is not a way to avoid
   naming your endpoints.
 
+- **The compliance declaration — three fields, required to list**
+  (top-level `compliance`, spec: `docs/specs/compliance-dossier.md`). Every listed poppy gets a
+  generated **vendor security package** — its slice of a customer's SOC 2 / vendor-risk audit,
+  built from your manifest and the platform's mechanisms at
+  `agentspoppy.com/poppies/<slug>/dossier` (+ a machine-readable `dossier.json`). Almost all of it
+  is platform-generated; you declare exactly three things:
+
+  ```json
+  "compliance": {
+    "dataHandled": "Mail, stored only in your own AWS account. The developer holds none.",
+    "subprocessors": [],                       // [] = "no user data leaves your cloud" — the
+                                               // strongest label a poppy can carry, stated, not
+                                               // defaulted. Otherwise: {name, operator?, purpose,
+                                               // dataShared} per service user data can reach.
+    "securityContact": "security@example.com"  // or an https URL
+  }
+  ```
+
+  A manifest without the block is refused at review, new listing and update alike (the
+  network-egress precedent). Your `subprocessors` must be consistent with your `network`
+  declaration and your data-flow declaration — the review reads them together. And the naming law
+  applies to your own copy too: a poppy is never "SOC 2 compliant" (only a licensed CPA firm
+  attests, about an organization); what you ship is audit-ready vendor documentation, and the
+  dossier says exactly that.
+
 **The acceptance test.** Install your poppy and open its permission screen. Do NOT chase a colour —
 the previous version of this line told you to, and it was wrong on three counts: the text it quoted
 no longer exists, six of the eight shipped poppies are red, and red does not mean what it said. A

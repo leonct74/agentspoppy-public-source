@@ -135,6 +135,40 @@ export interface ExtensionTeardown {
  * an optional host-spawned backend, and the host-bridge capabilities the frontend
  * is allowed to call.
  */
+/**
+ * One third party (or developer-operated service) that user data can reach —
+ * an entry in the poppy's compliance dossier (docs/specs/compliance-dossier.md).
+ * Rendered in the developer's-own-words register: attributed, reviewed at
+ * listing, never in the platform's voice.
+ */
+export interface ComplianceSubprocessor {
+  /** The service, by the name a user could look up — usually its hostname, e.g. "mailpoppy.com". */
+  name: string;
+  /** Who operates it (company or developer name). */
+  operator?: string;
+  /** What the service is for, one plain phrase. */
+  purpose: string;
+  /** Exactly what data reaches it — and, when relevant, what never does. */
+  dataShared: string;
+}
+
+/**
+ * The developer-declared slice of the compliance dossier — three fields, and only
+ * three. Everything else in the dossier is platform-generated from the manifest and
+ * the platform's own mechanisms, so a manifest cannot write marketing into its own
+ * audit package. An EMPTY `subprocessors` array is the strongest label a poppy can
+ * carry ("No subprocessors — no user data leaves your cloud") and must be stated
+ * deliberately, which is why the field is required rather than defaulted.
+ */
+export interface ComplianceDeclaration {
+  /** What user data the poppy handles and where it lives, one or two sentences. */
+  dataHandled: string;
+  /** Services user data can reach beyond the user's own cloud. Empty = none. */
+  subprocessors: ComplianceSubprocessor[];
+  /** Where a security team reports a vulnerability — an email address or https URL. */
+  securityContact: string;
+}
+
 export interface ExtensionManifest {
   /** Stable reverse-DNS id, e.g. "com.mailpoppy.desktop". */
   id: string;
@@ -160,6 +194,13 @@ export interface ExtensionManifest {
   backend?: ExtensionBackend;
   /** Optional cleanup hook for out-of-stack resources; the host POSTs it before teardown. */
   teardown?: ExtensionTeardown;
+  /**
+   * The developer-declared slice of the compliance dossier
+   * (docs/specs/compliance-dossier.md). Optional today so no existing poppy breaks;
+   * the catalogue requires it once the first-party fleet has declared (the
+   * network-egress phase-1c pattern, in the corrected order: declare, then require).
+   */
+  compliance?: ComplianceDeclaration;
   /** The host-bridge capabilities the frontend may call. Every entry must be known. */
   capabilities: Capability[];
 }
@@ -249,7 +290,62 @@ export function validateManifest(value: unknown): ManifestValidationResult {
     if (unknown.length > 0) errors.push(`unknown capabilities: ${unknown.map(String).join(", ")}`);
   }
 
+  if (m.compliance !== undefined) validateCompliance(m.compliance, errors);
+
   return { ok: errors.length === 0, errors };
+}
+
+/** Longest `compliance.dataHandled` may be — two honest sentences, not a privacy policy. */
+export const COMPLIANCE_DATA_HANDLED_MAX = 500;
+/** Most subprocessors a manifest may name — more than this is an architecture review, not a list. */
+export const COMPLIANCE_SUBPROCESSORS_MAX = 20;
+const COMPLIANCE_FIELD_MAX = 300;
+// An email address (loose) or an https URL — where a security team files a report.
+const SECURITY_CONTACT_RE = /^([^\s@]+@[^\s@]+\.[^\s@]+|https:\/\/\S+)$/;
+
+/**
+ * `compliance` is documentation, not scope — but a malformed declaration must be an
+ * error, never silently rendered: a dossier built from garbage would be worse than
+ * the honest "packaged before the declaration existed" state (the same rule as a
+ * malformed `network.machine`: a typo may not buy the quiet mode).
+ */
+function validateCompliance(value: unknown, errors: string[]): void {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    errors.push("compliance must be an object with dataHandled, subprocessors and securityContact");
+    return;
+  }
+  const c = value as Partial<ComplianceDeclaration>;
+  if (typeof c.dataHandled !== "string" || c.dataHandled.trim() === "") {
+    errors.push("compliance.dataHandled must state, in a sentence or two, what user data the poppy handles and where it lives");
+  } else if (c.dataHandled.length > COMPLIANCE_DATA_HANDLED_MAX) {
+    errors.push(`compliance.dataHandled must be at most ${COMPLIANCE_DATA_HANDLED_MAX} characters`);
+  }
+  if (!Array.isArray(c.subprocessors)) {
+    errors.push('compliance.subprocessors must be an array — [] declares "no user data leaves your cloud", and it must be stated, not omitted');
+  } else {
+    if (c.subprocessors.length > COMPLIANCE_SUBPROCESSORS_MAX) {
+      errors.push(`compliance.subprocessors may name at most ${COMPLIANCE_SUBPROCESSORS_MAX} services`);
+    }
+    for (const [i, sub] of c.subprocessors.entries()) {
+      if (!sub || typeof sub !== "object") {
+        errors.push(`compliance.subprocessors[${i}] must be an object with name, purpose and dataShared`);
+        continue;
+      }
+      const s = sub as Partial<ComplianceSubprocessor>;
+      for (const field of ["name", "purpose", "dataShared"] as const) {
+        const v = s[field];
+        if (typeof v !== "string" || v.trim() === "" || v.length > COMPLIANCE_FIELD_MAX) {
+          errors.push(`compliance.subprocessors[${i}].${field} must be a non-empty string of at most ${COMPLIANCE_FIELD_MAX} characters`);
+        }
+      }
+      if (s.operator !== undefined && (typeof s.operator !== "string" || s.operator.trim() === "" || s.operator.length > COMPLIANCE_FIELD_MAX)) {
+        errors.push(`compliance.subprocessors[${i}].operator must be a non-empty string of at most ${COMPLIANCE_FIELD_MAX} characters`);
+      }
+    }
+  }
+  if (typeof c.securityContact !== "string" || !SECURITY_CONTACT_RE.test(c.securityContact)) {
+    errors.push("compliance.securityContact must be an email address or an https URL");
+  }
 }
 
 function validatePermissionSet(ps: unknown, errors: string[]): void {
