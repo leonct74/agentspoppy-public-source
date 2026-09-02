@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.0
 
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import type { ConnectedAccount } from "@agentspoppy/core";
 import type { CallerIdentity } from "../api/broker";
 import { SetupWizard, friendlyError } from "./SetupWizard";
@@ -62,14 +62,14 @@ function renderWizard(over: Partial<Parameters<typeof SetupWizard>[0]> = {}) {
   return props;
 }
 
-/** Step 1 → 2: pick a region card (selection advances by itself — no Next button). */
-function pickRegion(place = /Europe \(Ireland\)/) {
-  fireEvent.click(screen.getByRole("button", { name: place }));
+/** Slide 1 → onward: the cloud chooser's "I already have an account". */
+function enterAws() {
+  fireEvent.click(screen.getByRole("button", { name: /I already have an account/ }));
 }
 
-/** Step 2 → 3. */
+/** IAM slide → key slide. */
 function toKeyStep() {
-  fireEvent.click(screen.getByRole("button", { name: /Next: create its access key/ }));
+  fireEvent.click(screen.getByRole("button", { name: /next: its access key/i }));
 }
 
 function fillKeys() {
@@ -77,82 +77,154 @@ function fillKeys() {
   fireEvent.change(screen.getByPlaceholderText(/•+/), { target: { value: "wizard-secret" } });
 }
 
+/** Key slide → region slide (paste path: region is LAST, its confirm is the finish). */
+function toRegionStep() {
+  fireEvent.click(screen.getByRole("button", { name: /choose where it lives/i }));
+}
+
+function pickRegion(place = /Europe \(Ireland\)/) {
+  fireEvent.click(screen.getByRole("button", { name: place }));
+}
+
+/** The region slide's finish — deploys with everything collected. */
+function finishSetup() {
+  fireEvent.click(screen.getByRole("button", { name: /^Set up in / }));
+}
+
+/** The whole paste path in one call: cloud → policy → key → region → run. */
+function walkPastePath() {
+  enterAws();
+  toKeyStep();
+  fillKeys();
+  toRegionStep();
+  pickRegion();
+  finishSetup();
+}
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
 });
 
-describe("SetupWizard steps", () => {
-  it("step 1 is the region — flags + place names, no default, and picking it advances by itself", () => {
+describe("SetupWizard steps (founder redesign 2026-09-02: cloud → user → key → region)", () => {
+  it("opens on the cloud chooser: AWS live, the other two greyed with coming soon", () => {
     vi.stubGlobal("fetch", happyFetch().fn);
     renderWizard();
 
-    expect(screen.getByText("Step 1 of 3")).toBeTruthy();
-    // Flags and human place names, not bare region codes.
+    expect(screen.getByText("Step 1 of 4")).toBeTruthy();
+    expect(screen.getByText("Choose your cloud")).toBeTruthy();
+    expect(screen.getAllByText("Coming soon").length).toBe(2);
+    // No console work and no region yet.
+    expect(screen.queryByPlaceholderText("AKIA…")).toBeNull();
+    expect(screen.queryByText("🇮🇪")).toBeNull();
+  });
+
+  it("the big AWS mark and the sign-up link both open AWS sign-up externally", () => {
+    vi.stubGlobal("fetch", happyFetch().fn);
+    const opened: string[] = [];
+    vi.stubGlobal("open", (url?: string | URL) => {
+      opened.push(String(url));
+      return null;
+    });
+    renderWizard();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create an AWS account" }));
+    fireEvent.click(screen.getByRole("button", { name: /Sign up for AWS/ }));
+    expect(opened.length).toBe(2);
+    expect(opened[0]).toContain("signup");
+    // Neither leaves the chooser.
+    expect(screen.getByText("Step 1 of 4")).toBeTruthy();
+  });
+
+  it("step 2 is the IAM user — one action per card, with stuck? helpers behind disclosures", () => {
+    vi.stubGlobal("fetch", happyFetch().fn);
+    renderWizard();
+    enterAws();
+
+    expect(screen.getByText("Step 2 of 4")).toBeTruthy();
+    expect(screen.getByText(/its own key-holder/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Copy the policy/ })).toBeTruthy();
+    expect(screen.getAllByText(/Stuck\?/).length).toBe(2);
+  });
+
+  it("step 3 walks the access key to AWS's Done button and won't advance without both values", () => {
+    vi.stubGlobal("fetch", happyFetch().fn);
+    renderWizard();
+    enterAws();
+    toKeyStep();
+
+    expect(screen.getByText("Step 3 of 4")).toBeTruthy();
+    expect(screen.getAllByText(/Done/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/only once/)).toBeTruthy();
+
+    const next = screen.getByRole("button", { name: /choose where it lives/i });
+    expect((next as HTMLButtonElement).disabled).toBe(true);
+    fillKeys();
+    expect((next as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("step 4 is the region — flags, the closest one suggested, and the finish is its confirm", () => {
+    vi.stubGlobal("fetch", happyFetch().fn);
+    renderWizard();
+    enterAws();
+    toKeyStep();
+    fillKeys();
+    toRegionStep();
+
+    expect(screen.getByText("Step 4 of 4")).toBeTruthy();
     expect(screen.getByText("🇮🇪")).toBeTruthy();
     expect(screen.getByText("Europe (Frankfurt)")).toBeTruthy();
-    // No key fields yet — the console work comes later.
-    expect(screen.queryByPlaceholderText("AKIA…")).toBeNull();
-
+    expect(screen.getByText("Closest to you")).toBeTruthy();
+    // No region picked yet — the finish stays disabled and says why.
+    const finish = screen.getByRole("button", { name: /Pick a region to finish/ });
+    expect((finish as HTMLButtonElement).disabled).toBe(true);
     pickRegion();
-    expect(screen.getByText("Step 2 of 3")).toBeTruthy();
-    expect(screen.getByText(/Create the user AgentsPoppy will set up with/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Set up in Europe \(Ireland\)/ })).toBeTruthy();
   });
 
-  it("step 2 carries the policy button and the friendlier user-name wording", () => {
+  it("the top-left Back walks WITHIN the flow — region → key → user → cloud, inputs remembered", () => {
     vi.stubGlobal("fetch", happyFetch().fn);
     renderWizard();
-    pickRegion();
-
-    expect(screen.getByText(/or a name you'll remember/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: /Copy the policy/ })).toBeTruthy();
-  });
-
-  it("step 3 walks the access key to AWS's Done button and won't fire without both values", () => {
-    vi.stubGlobal("fetch", happyFetch().fn);
-    renderWizard();
-    pickRegion();
+    enterAws();
     toKeyStep();
-
-    expect(screen.getByText("Step 3 of 3")).toBeTruthy();
-    // The Done reminder — and the reason it matters (the secret is shown only once).
-    expect(screen.getAllByText(/Done/).length).toBeGreaterThan(0);
-    expect(screen.getByText(/the secret is shown only once/)).toBeTruthy();
-
-    const go = screen.getByRole("button", { name: "Connect and set up" });
-    expect((go as HTMLButtonElement).disabled).toBe(true);
     fillKeys();
-    expect((go as HTMLButtonElement).disabled).toBe(false);
+    toRegionStep();
+
+    fireEvent.click(screen.getByRole("button", { name: "← Back" }));
+    expect(screen.getByText("Step 3 of 4")).toBeTruthy();
+    expect(screen.getByDisplayValue("AKIAWIZARD")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "← Back" }));
+    expect(screen.getByText("Step 2 of 4")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "← Back" }));
+    expect(screen.getByText("Step 1 of 4")).toBeTruthy();
   });
 
-  it("every step has a way back — key → policy → region", () => {
+  it("a first-run user can NEVER fall out of the onboarding — no Back and no exit on the first screen", () => {
     vi.stubGlobal("fetch", happyFetch().fn);
-    renderWizard();
-    pickRegion();
-    toKeyStep();
+    const props = renderWizard();
+    expect(screen.queryByRole("button", { name: "← Back" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Exit setup/ })).toBeNull();
+    expect(props.onBack).not.toHaveBeenCalled();
+  });
 
-    fireEvent.click(screen.getByRole("button", { name: "← Previous step" }));
-    expect(screen.getByText("Step 2 of 3")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "← Previous step" }));
-    expect(screen.getByText("Step 1 of 3")).toBeTruthy();
-    // The chosen region is remembered when walking back.
-    expect(screen.getByRole("button", { name: /Europe \(Ireland\)/ }).className).toContain("selected");
+  it("with a connected account behind it, the first screen offers an honest exit instead", () => {
+    vi.stubGlobal("fetch", happyFetch().fn);
+    const props = renderWizard({ accounts: [account], completedHandsOffToPro: false });
+    fireEvent.click(screen.getByRole("button", { name: "← Exit setup" }));
+    expect(props.onBack).toHaveBeenCalled();
   });
 });
 
 describe("SetupWizard setup run", () => {
-  it("one button runs the whole setup — bootstrap with keys + the chosen region, verify, success", async () => {
+  it("the region confirm runs the whole setup — bootstrap with keys + the chosen region, verify, celebration", async () => {
     const { fn } = happyFetch();
     vi.stubGlobal("fetch", fn);
     const props = renderWizard();
 
-    pickRegion(); // Ireland
-    toKeyStep();
-    fillKeys();
-    fireEvent.click(screen.getByRole("button", { name: "Connect and set up" }));
+    walkPastePath();
 
     expect(await screen.findByRole("img", { name: "Success" })).toBeTruthy();
-    expect(screen.getByText("Your AWS is connected")).toBeTruthy();
+    expect(screen.getByText(/Your cloud is ready/)).toBeTruthy();
 
     // The account-less one-shot got the keys and the REGION THE USER PICKED —
     // there is no default to fall through to.
@@ -164,7 +236,7 @@ describe("SetupWizard setup run", () => {
     });
     expect(fn.mock.calls.some(([u]) => String(u).endsWith("/verify"))).toBe(true);
 
-    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    fireEvent.click(screen.getByRole("button", { name: /Explore the poppies/ }));
     expect(props.onDone).toHaveBeenCalled();
   });
 
@@ -173,16 +245,13 @@ describe("SetupWizard setup run", () => {
     vi.stubGlobal("fetch", fn);
     renderWizard();
 
-    pickRegion();
-    toKeyStep();
-    fillKeys();
-    fireEvent.click(screen.getByRole("button", { name: "Connect and set up" }));
+    walkPastePath();
 
     expect(await screen.findByRole("img", { name: "Success" })).toBeTruthy();
     expect(verifyCount()).toBe(3);
   });
 
-  it("a failed setup lands back on the key step with a plain-words error and the keys intact", async () => {
+  it("a failed setup lands back on the region step with a plain-words error, keys intact one step back", async () => {
     const fn = vi.fn(async (url: string, init?: RequestInit) => {
       if (url.endsWith("/aws/bootstrap") && init?.method === "POST") {
         return jsonResponse(
@@ -195,23 +264,25 @@ describe("SetupWizard setup run", () => {
     vi.stubGlobal("fetch", fn);
     renderWizard();
 
-    pickRegion();
-    toKeyStep();
-    fillKeys();
-    fireEvent.click(screen.getByRole("button", { name: "Connect and set up" }));
+    walkPastePath();
 
     expect(await screen.findByText(/isn't allowed to run the setup/)).toBeTruthy();
     expect(screen.getByText(/AWS said: .*iam:CreateRole/)).toBeTruthy();
-    // Still on step 3, keys preserved — a retry is one click, not a re-paste.
-    expect(screen.getByText("Step 3 of 3")).toBeTruthy();
+    // Landed back where it fired (region), the retry is one click…
+    expect(screen.getByText("Step 4 of 4")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Set up in Europe \(Ireland\)/ })).toBeTruthy();
+    // …and the pasted keys survived, one step back, for a re-check.
+    fireEvent.click(screen.getByRole("button", { name: "← Back" }));
     expect(screen.getByDisplayValue("AKIAWIZARD")).toBeTruthy();
   });
 
-  it("with working credentials on the machine, region choice leads to one-click setup — no keys posted", async () => {
+  it("with working credentials on the machine: cloud → region (picking advances) → one-click, no keys posted", async () => {
     const { fn } = happyFetch();
     vi.stubGlobal("fetch", fn);
     renderWizard({ identity });
 
+    enterAws();
+    expect(screen.getByText("Step 2 of 3")).toBeTruthy(); // region, on the shorter one-click trail
     pickRegion();
     expect(screen.getByText(/no keys to paste/i)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Set up my AWS now" }));
@@ -227,18 +298,20 @@ describe("SetupWizard setup run", () => {
     vi.stubGlobal("fetch", happyFetch().fn);
     renderWizard({ identity });
 
+    enterAws();
     pickRegion();
     fireEvent.click(screen.getByRole("button", { name: "Use a different key instead" }));
-    expect(screen.getByText("Step 2 of 3")).toBeTruthy();
+    expect(screen.getByText(/its own key-holder/)).toBeTruthy();
   });
 
-  it("resumes a half-done pro setup against the linked account: no region step, its region wins", async () => {
+  it("resumes a half-done pro setup against the linked account: no chooser, no region step, its region wins", async () => {
     const { fn } = happyFetch();
     vi.stubGlobal("fetch", fn);
     renderWizard({ accounts: [account] });
 
     // The account already fixed its region — the wizard starts at the console work.
     expect(screen.getByText("Step 1 of 2")).toBeTruthy();
+    expect(screen.queryByText("Choose your cloud")).toBeNull();
     expect(screen.queryByText("🇮🇪")).toBeNull();
 
     toKeyStep();
@@ -251,10 +324,16 @@ describe("SetupWizard setup run", () => {
     expect(JSON.parse(String((bootstrap[1] as RequestInit).body)).region).toBeUndefined();
   });
 
-  it("hands over to the pro setup on request", () => {
+  it("the advanced-setup escape lives inside the key screen's SSO helper, not as onboarding chrome", () => {
     vi.stubGlobal("fetch", happyFetch().fn);
     const props = renderWizard();
-    fireEvent.click(screen.getByRole("button", { name: "Use the pro setup" }));
+    // Nowhere on the chooser…
+    expect(screen.queryByText(/advanced setup/)).toBeNull();
+    enterAws();
+    toKeyStep();
+    // …but exactly where its audience hits the wall: no access keys under company SSO.
+    expect(screen.getByText(/company SSO, temporary credentials/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Open the advanced setup" }));
     expect(props.onProSwitch).toHaveBeenCalled();
   });
 
@@ -277,10 +356,7 @@ describe("SetupWizard setup run", () => {
     vi.stubGlobal("fetch", fn);
     renderWizard({ verifyTimeoutMs: 1 });
 
-    pickRegion();
-    toKeyStep();
-    fillKeys();
-    fireEvent.click(screen.getByRole("button", { name: "Connect and set up" }));
+    walkPastePath();
 
     expect(await screen.findByText(/hasn't confirmed the connection yet/)).toBeTruthy();
     expect(screen.queryByText(/Re-copy it from the console/)).toBeNull();
@@ -310,6 +386,7 @@ describe("SetupWizard setup run", () => {
     vi.stubGlobal("fetch", fn);
     renderWizard({ identity });
 
+    enterAws();
     pickRegion();
     fireEvent.click(screen.getByRole("button", { name: "Set up my AWS now" }));
 

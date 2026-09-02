@@ -17,6 +17,7 @@ import accessPolicy from "../assets/access-policy.json";
 export const ACCESS_POLICY_JSON = JSON.stringify(accessPolicy, null, 2);
 
 export const AWS_FREE_TIER_URL = "https://aws.amazon.com/free";
+export const AWS_SIGNUP_URL = "https://signin.aws.amazon.com/signup?request_type=register";
 export const AWS_CLI_URL = "https://aws.amazon.com/cli/";
 export const IAM_USERS_URL = "https://console.aws.amazon.com/iam/home#/users";
 // MUST point at the PUBLIC mirror. This monorepo is private forever (it carries the web
@@ -43,6 +44,27 @@ export const REGION_CHOICES: { id: string; flag: string; place: string }[] = [
 ];
 
 export const COMMON_REGIONS = REGION_CHOICES.map((r) => r.id);
+
+/**
+ * Best-guess CLOSEST region from the machine's IANA timezone — a suggestion the
+ * region screen labels "Closest to you", never an auto-pick: latency is why the
+ * closest region is usually right, but residency is the user's call. Pure, so the
+ * mapping is testable; unknown zones fall back to us-east-1 (the most connected
+ * default) without claiming closeness.
+ */
+export function suggestRegion(tz: string): string {
+  if (/^Europe\/(London|Belfast)/.test(tz)) return "eu-west-2";
+  if (/^Europe\/(Dublin|Lisbon)/.test(tz)) return "eu-west-1";
+  if (/^Europe\//.test(tz)) return "eu-central-1";
+  if (/^Australia\//.test(tz)) return "ap-southeast-2";
+  if (/^Asia\/(Tokyo|Seoul|Sapporo)/.test(tz)) return "ap-northeast-1";
+  if (/^Asia\//.test(tz)) return "ap-southeast-1";
+  if (/^America\/(Los_Angeles|Vancouver|Tijuana|Phoenix|Denver|Edmonton|Boise)/.test(tz)) return "us-west-2";
+  if (/^America\/(Chicago|Winnipeg|Mexico_City|Indiana|Detroit)/.test(tz)) return "us-east-2";
+  if (/^America\//.test(tz)) return "us-east-1";
+  if (/^Africa\//.test(tz)) return "eu-west-1";
+  return "us-east-1";
+}
 
 export const isTauri = (): boolean => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 

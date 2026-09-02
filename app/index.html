@@ -15,7 +15,17 @@
       // desktop shell — there the host injects the broker URL itself.
       if (!("__TAURI_INTERNALS__" in window)) {
         var __broker = new URLSearchParams(location.search).get("broker");
-        if (__broker && /^http:\/\/127\.0\.0\.1:\d+$/.test(__broker)) window.__AGENTSPOPPY_BROKER__ = __broker;
+        // Shorthand ?broker=8798 means the loopback port; full form stays accepted.
+        if (__broker && /^\d+$/.test(__broker)) __broker = "http://127.0.0.1:" + __broker;
+        var __ok = function (u) { return typeof u === "string" && /^http:\/\/127\.0\.0\.1:\d+$/.test(u); };
+        // Persist the override: the harness tab can be recreated at the bare origin
+        // (dev-pane restores drop the query), and losing it silently re-points the app
+        // at the default port — every call then dies as "helper isn't responding".
+        try {
+          if (__ok(__broker)) localStorage.setItem("agentspoppy:dev-broker", __broker);
+          var __stored = __ok(__broker) ? __broker : localStorage.getItem("agentspoppy:dev-broker");
+          if (__ok(__stored)) window.__AGENTSPOPPY_BROKER__ = __stored;
+        } catch (e) {}
       }
     </script>
     <script type="module" src="/src/main.tsx"></script>

@@ -48,10 +48,29 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** Accounts that aren't fully set up land on the WIZARD; these tests exercise the pro stepper. */
-function toPro() {
-  fireEvent.click(screen.getByRole("button", { name: "Use the pro setup" }));
+/** Accounts that aren't fully set up land on the WIZARD; these tests exercise the pro
+ *  stepper. The advanced-setup escape lives inside the key screen's SSO helper now
+ *  (founder, 2026-09-02 — no pro chrome in the onboarding), so reaching pro means
+ *  walking to the key slide first. */
+async function toPro() {
+  // Wait out the identity probe — every slide lives behind it.
+  await waitFor(() => expect(document.querySelector(".probing")).toBeNull());
+  // Fresh machine: pass the cloud chooser first.
+  const enter = screen.queryByRole("button", { name: /I already have an account/ });
+  if (enter) fireEvent.click(enter);
+  // One-click shape (credentials on the machine): region → one-click → opt into keys.
+  const region = screen.queryByRole("button", { name: /Europe \(Ireland\)/ });
+  if (region) {
+    fireEvent.click(region);
+    fireEvent.click(await screen.findByRole("button", { name: "Use a different key instead" }));
+  }
+  fireEvent.click(await screen.findByRole("button", { name: /next: its access key/i }));
+  fireEvent.click(screen.getByRole("button", { name: "Open the advanced setup" }));
 }
+
+/** The wizard's unmistakable marker for a linked-but-unfinished account (it starts on
+ *  the IAM slide there — no cloud chooser). */
+const WIZARD_MARKER = /its own key-holder/;
 
 describe("ConnectAwsView", () => {
   it("lands a not-yet-set-up user on the wizard, one click away from pro — and back again", async () => {
@@ -59,15 +78,15 @@ describe("ConnectAwsView", () => {
     render(<ConnectAwsView accounts={[account]} onBack={() => {}} onChanged={() => {}} />);
 
     // Wizard is the default for anyone whose setup isn't finished (founder, 2026-08-11).
-    expect(screen.getByRole("button", { name: "Use the pro setup" })).toBeTruthy();
+    expect(await screen.findByText(WIZARD_MARKER)).toBeTruthy();
     expect(screen.queryByText("Paste the Broker Role ARN")).toBeNull();
 
-    // Pro is one click away…
-    toPro();
+    // Pro is a couple of honest clicks away (via the key screen's SSO helper)…
+    await toPro();
     expect(screen.getByText("Paste the Broker Role ARN")).toBeTruthy();
     // …and anyone tangled in it can hand back to the wizard just as easily.
     fireEvent.click(screen.getByRole("button", { name: "Switch to the wizard" }));
-    expect(screen.getByRole("button", { name: "Use the pro setup" })).toBeTruthy();
+    expect(await screen.findByText(WIZARD_MARKER)).toBeTruthy();
   });
 
   it("lands an already-set-up account straight on the pro view (management, not onboarding)", async () => {
@@ -94,9 +113,9 @@ describe("ConnectAwsView", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /Unlink \/ use a different account/ }));
 
-    // The wizard appears (its pro-switch link is unique to it) and STAYS: the
-    // completed-account handoff is suppressed for an explicit switch.
-    expect(await screen.findByRole("button", { name: "Use the pro setup" })).toBeTruthy();
+    // The wizard appears and STAYS: the completed-account handoff is suppressed for
+    // an explicit switch.
+    expect(await screen.findByText(WIZARD_MARKER)).toBeTruthy();
     await waitFor(() =>
       expect(fetchMock.mock.calls.some(([, i]) => (i as RequestInit)?.method === "DELETE")).toBe(true),
     );
@@ -106,7 +125,7 @@ describe("ConnectAwsView", () => {
   it("shows the operator identity and the full set of guided steps, with no-admin framing", async () => {
     vi.stubGlobal("fetch", routedFetch());
     render(<ConnectAwsView accounts={[account]} onBack={() => {}} onChanged={() => {}} />);
-    toPro();
+    await toPro();
 
     expect(screen.getByText("Connect your AWS")).toBeTruthy();
     expect(screen.getByText(/never asks for or uses admin access/i)).toBeTruthy();
@@ -123,7 +142,7 @@ describe("ConnectAwsView", () => {
   it("generates and shows the CloudFormation setup template (manual path)", async () => {
     vi.stubGlobal("fetch", routedFetch());
     render(<ConnectAwsView accounts={[account]} onBack={() => {}} onChanged={() => {}} />);
-    toPro();
+    await toPro();
 
     // The template lives behind the expert "Manual" path; automated is the default.
     fireEvent.click(screen.getByRole("tab", { name: "Manual (expert)" }));
@@ -173,7 +192,7 @@ describe("ConnectAwsView", () => {
     const fetchMock = bootstrapFetch();
     vi.stubGlobal("fetch", fetchMock);
     render(<ConnectAwsView accounts={[account]} onBack={() => {}} onChanged={() => {}} />);
-    toPro();
+    await toPro();
 
     // AWS is already connected → automated reuse is the default; no key form, just deploy.
     // Wait for the reuse panel (its "different credentials" link is unique to it) so we
@@ -194,7 +213,7 @@ describe("ConnectAwsView", () => {
     const fetchMock = bootstrapFetch();
     vi.stubGlobal("fetch", fetchMock);
     render(<ConnectAwsView accounts={[account]} onBack={() => {}} onChanged={() => {}} />);
-    toPro();
+    await toPro();
 
     fireEvent.click(await screen.findByRole("button", { name: "Use different credentials for this step" }));
     fireEvent.change(screen.getByLabelText("Access Key ID"), { target: { value: "AKIAADMIN" } });
@@ -239,7 +258,7 @@ describe("ConnectAwsView", () => {
   it("lets an already-connected user reveal the key form to change AWS credentials", async () => {
     vi.stubGlobal("fetch", routedFetch());
     render(<ConnectAwsView accounts={[account]} onBack={() => {}} onChanged={() => {}} />);
-    toPro();
+    await toPro();
 
     // Connected → step 1 shows the identity, no key form until asked.
     await screen.findByText(/Reached AWS as/);
@@ -255,7 +274,7 @@ describe("ConnectAwsView", () => {
   it("offers to link an account on first run, prefilled from the operator identity", async () => {
     vi.stubGlobal("fetch", routedFetch());
     render(<ConnectAwsView accounts={[]} onBack={() => {}} onChanged={() => {}} />);
-    toPro();
+    await toPro();
 
     expect(await screen.findByText("Link this account")).toBeTruthy();
     expect(screen.getByDisplayValue("000000000000")).toBeTruthy();
@@ -264,7 +283,7 @@ describe("ConnectAwsView", () => {
   it("guides a brand-new user with no AWS to create a free account, then offers the in-app form + CLI path", async () => {
     vi.stubGlobal("fetch", noAwsFetch());
     render(<ConnectAwsView accounts={[]} onBack={() => {}} onChanged={() => {}} />);
-    toPro();
+    await toPro();
 
     expect(await screen.findByText("Create a free AWS account")).toBeTruthy();
     expect(screen.getByText("No AWS credentials found on this machine.")).toBeTruthy();
@@ -287,7 +306,7 @@ describe("ConnectAwsView", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     render(<ConnectAwsView accounts={[]} onBack={() => {}} onChanged={() => {}} />);
-    toPro();
+    await toPro();
 
     fireEvent.click(await screen.findByText("I already have AWS"));
     // Scope to the step-1 paste panel — step 3's automated form shares these placeholders.
