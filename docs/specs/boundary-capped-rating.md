@@ -1,6 +1,6 @@
 # Boundary-capped identity creates — the honest way to fewer "Broad access" chips
 
-**Status:** BUILT 2026-09-02 (host half; ships in 0.3.17) — APPROVED to build by the founder (2026-09-02: *"yes, I want you to proceed
+**Status:** BUILT + LIVE-PROVEN 2026-09-02 (host half; ships in 0.3.17 — the Deny's polarity was proven in the sandbox through the real operator path, see broker-role-v2.md's proof table; fleet dry-run: Affiliate/Crew/LiveOps/Traffic graduate to medium, MailPoppy stays high on its own SES/Route 53/GuardDuty `*` grants) — APPROVED to build by the founder (2026-09-02: *"yes, I want you to proceed
 with the AgentsPoppyBoundary is verifiably attached"*), from his observation that 5 of 7
 listed poppies show "Broad access". Verified same day: all five highs share ONE cause —
 `iam:CreateRole` (Lambda execution roles, unavoidable for any serverless poppy) — and the
