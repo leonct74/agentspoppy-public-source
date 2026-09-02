@@ -303,11 +303,15 @@ describe("wildcard characters other than * also mean 'not narrowed'", () => {
     }
   });
 
-  // A KNOWN LIMIT, asserted so nobody mistakes it for solved: AWS ids have fixed prefixes,
-  // so "instance/i-*" matches every instance while being a genuine name prefix. Nothing in
-  // the ARN separates it from "table/CrewPoppy*", which really does narrow.
-  it("still reads an id-prefix pattern as scoped — documented, not fixed", () => {
-    expect(assessGrant(grant("ec2", "ec2:TerminateInstances", "arn:aws:ec2:*:*:instance/i-*")).scoped).toBe(true);
+  // The former KNOWN LIMIT, fixed by rating-reconciliation.md 5b (2026-09-02): AWS ids have
+  // fixed prefixes, so "instance/i-*" matches every instance while reading like a name. The
+  // per-service id-format table now reads it as what it is — and "table/CrewPoppy*", which
+  // really does narrow, stays a name.
+  it("reads an id-prefix pattern as UNBOUNDED — the limit is fixed, not documented", () => {
+    const r = assessGrant(grant("ec2", "ec2:TerminateInstances", "arn:aws:ec2:*:*:instance/i-*"));
+    expect(r.scoped).toBe(false);
+    expect(r.level).toBe("high");
+    expect(assessGrant(grant("dynamodb", "dynamodb:DeleteTable", "arn:aws:dynamodb:*:*:table/CrewPoppy*")).scoped).toBe(true);
   });
 });
 

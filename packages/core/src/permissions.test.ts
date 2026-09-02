@@ -2,20 +2,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.0
 
 import { describe, it, expect } from "vitest";
-import {
-  grantCanMutate,
-  grantCanDestroy,
-  grantIsTagScoped,
-  describeGrant,
-  describePermissionSet,
-  connectionTags,
-  hasAttributionTags,
-  isFullyAttributable,
-  assessGrant,
-  assessPermissionSet,
-  maxRisk,
-  ATTRIBUTION_TAG_KEYS,
-} from "./permissions";
+import { grantCanMutate, grantCanDestroy, grantIsTagScoped, describeGrant, describePermissionSet, connectionTags, hasAttributionTags, isFullyAttributable, assessGrant, assessPermissionSet, maxRisk, ATTRIBUTION_TAG_KEYS, grantIsRoleOnly, scopeIsIdPrefix, scopeIsUnbounded } from "./permissions";
 import { TAGGED_AS_SELF } from "./types";
 import type { ConnectedAccount, Connection, PermissionSet } from "./types";
 
@@ -181,5 +168,76 @@ describe("policy risk", () => {
     const a = assessPermissionSet(noTags);
     expect(a.level).toBe("medium");
     expect(a.warnings[0]).toMatch(/attribution tags/);
+  });
+});
+
+
+// boundary-capped-rating.md — the graduation law applied to IAM: a role-only grant rates
+// medium ONLY under a live report that the deployed broker role refuses unbounded creates.
+describe("boundary-capped identity creates (graduates only on the live report)", () => {
+  const roleGrant = { service: "iam", actions: ["CreateRole", "DeleteRole", "PassRole", "PutRolePolicy", "TagRole", "PutRolePermissionsBoundary"], resourceScope: "arn:aws:iam::*:role/DemoPoppy*" };
+
+  it("without the report — or with it false — a confined role grant stays high, as today", () => {
+    expect(assessGrant(roleGrant).level).toBe("high");
+    expect(assessGrant(roleGrant, { boundaryEnforced: false }).level).toBe("high");
+  });
+
+  it("with the report, a role-only grant is capped: medium, still scoped, and says AWS enforces it", () => {
+    const r = assessGrant(roleGrant, { boundaryEnforced: true });
+    expect(r).toMatchObject({ level: "medium", scoped: true });
+    expect(r.reason).toMatch(/capped by your AgentsPoppyBoundary, enforced by AWS/);
+  });
+
+  it("never graduates a grant that reaches users, groups or policies — a boundary caps roles only", () => {
+    const users = { service: "iam", actions: ["CreateRole", "CreateUser"], resourceScope: "arn:aws:iam::*:role/DemoPoppy*" };
+    expect(assessGrant(users, { boundaryEnforced: true }).level).toBe("high");
+    const policies = { service: "iam", actions: ["CreateRole", "CreatePolicyVersion"], resourceScope: "arn:aws:iam::*:role/DemoPoppy*" };
+    expect(assessGrant(policies, { boundaryEnforced: true }).level).toBe("high");
+  });
+
+  it("never graduates a wide role grant — a boundary caps power, not reach", () => {
+    expect(assessGrant({ service: "iam", actions: ["CreateRole"], resourceScope: "*" }, { boundaryEnforced: true }).level).toBe("high");
+  });
+
+  it("grantIsRoleOnly: every action names a role AND the scope is a role ARN", () => {
+    expect(grantIsRoleOnly(roleGrant)).toBe(true);
+    expect(grantIsRoleOnly({ service: "iam", actions: ["CreateRole"], resourceScope: "arn:aws:iam::*:user/x*" })).toBe(false);
+    expect(grantIsRoleOnly({ service: "iam", actions: ["*"], resourceScope: "arn:aws:iam::*:role/x*" })).toBe(false);
+    expect(grantIsRoleOnly({ service: "lambda", actions: ["CreateFunction"], resourceScope: "arn:aws:lambda:*:*:function:x*" })).toBe(false);
+  });
+
+  it("assessPermissionSet threads the context to every grant", () => {
+    const ps = { id: "p", name: "P", description: "", grants: [roleGrant], requiredTags: ["agentspoppy:account", "agentspoppy:app", "agentspoppy:connection"], limits: null };
+    expect(assessPermissionSet(ps).level).toBe("high");
+    expect(assessPermissionSet(ps, { boundaryEnforced: true }).level).toBe("medium");
+  });
+});
+
+// rating-reconciliation.md fix 5b — id-format prefixes rate as what they are.
+describe("id-prefix scopes (fix 5b)", () => {
+  it("recognises AWS id formats as unbounded — apps/d*, hostedzone/Z*, instance/i-*", () => {
+    expect(scopeIsIdPrefix("arn:aws:amplify:*:*:apps/d*", "amplify")).toBe(true);
+    expect(scopeIsUnbounded("arn:aws:amplify:*:*:apps/d*", "amplify")).toBe(true);
+    expect(scopeIsUnbounded("arn:aws:route53:::hostedzone/Z*", "route53")).toBe(true);
+    expect(scopeIsUnbounded("arn:aws:ec2:*:*:instance/i-*", "ec2")).toBe(true);
+  });
+
+  it("a genuine name prefix is still a name — the table adds, it never guesses", () => {
+    expect(scopeIsIdPrefix("arn:aws:route53:::hostedzone/Z0450NOLLY", "route53")).toBe(false);
+    expect(scopeIsUnbounded("arn:aws:dynamodb:*:*:table/CrewPoppy*", "dynamodb")).toBe(false);
+    expect(scopeIsUnbounded("arn:aws:amplify:*:*:apps/d1abc2def3*", "amplify")).toBe(false);
+  });
+
+  it("a DISCLOSED id-prefix scope rates medium in its own honest register; undisclosed rates as the unbounded grant it is", () => {
+    const disclosed = assessGrant({
+      service: "amplify", actions: ["StartJob", "DeleteApp"], resourceScope: "arn:aws:amplify:*:*:apps/d*",
+      reason: "Attaches the domain you typed to your app; in practice this scope reaches any Amplify app in the account.",
+    });
+    expect(disclosed).toMatchObject({ level: "medium", scoped: false });
+    expect(disclosed.reason).toMatch(/in practice any of them/);
+    expect(disclosed.reason).toMatch(/nothing narrower to hold/);
+    const bare = assessGrant({ service: "amplify", actions: ["StartJob", "DeleteApp"], resourceScope: "arn:aws:amplify:*:*:apps/d*" });
+    expect(bare.level).toBe("high");
+    expect(bare.scoped).toBe(false);
   });
 });

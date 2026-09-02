@@ -13,6 +13,9 @@ import { Countdown } from "../components/Countdown";
 import { Icon } from "../components/Icon";
 
 export interface ConnectionsViewProps {
+  /** Live: the deployed broker role carries the boundary Deny — the rating's licence to
+   *  call role creates "capped" (boundary-capped-rating.md). Absent = rate as before. */
+  boundaryEnforced?: boolean;
   groups: AccountGroup[];
   /** Recent account activity (CloudTrail); the "around AgentsPoppy" feed. */
   activity?: ActivityReport | null;
@@ -51,6 +54,7 @@ function capabilitySummary(c: Connection): string {
  * connected apps ("poppies") listed beneath as entries it watches and governs.
  */
 export function ConnectionsView({
+  boundaryEnforced = false,
   groups,
   activity,
   onSelect,
@@ -169,7 +173,7 @@ export function ConnectionsView({
               card that opens the curated directory. */}
           <div className="os-grid">
             {g.poppies.map((c) => {
-              const level = assessPermissionSet(c.permissionSet).level;
+              const level = assessPermissionSet(c.permissionSet, { boundaryEnforced }).level;
               const showSupervised = !!c.supervised && (c.status === "active" || c.status === "paused");
               return (
                 <div key={c.id} className="os-card">

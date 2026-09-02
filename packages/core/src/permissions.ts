@@ -255,6 +255,41 @@ function resourcePortion(scope: string): string {
 const UNTYPED_RESOURCE_SERVICES = new Set(["s3", "sns", "sqs"]);
 
 /**
+ * Live facts about the ACCOUNT the rating is shown for, reported by the running broker —
+ * never read from a manifest. Today one fact: whether the deployed broker role carries the
+ * step-3 Deny that makes every poppy-created role carry the AgentsPoppyBoundary
+ * (docs/specs/boundary-capped-rating.md). Absent/false = rate as before.
+ */
+export interface RatingContext {
+  boundaryEnforced?: boolean;
+}
+
+/**
+ * Per-service resource-id FORMATS (rating-reconciliation.md fix 5b). AWS ids share fixed
+ * prefixes — every Amplify app id starts with `d`, every hosted zone with `Z`, every EC2
+ * instance with `i-`, every Cognito pool with `<region>_` — so a "name pattern" made of
+ * nothing but that prefix and a wildcard matches EVERY resource of the type while reading,
+ * to a literal-string test, like a narrow name. These patterns rate as what they are:
+ * unbounded. (The listing gate blesses them only with a disclosed reason — see
+ * listingGate.ts; the honest register for a disclosed one is in assessGrant.)
+ */
+const ID_PREFIX_FORMATS: Record<string, RegExp[]> = {
+  amplify: [/^apps\/[a-z]?[*?]+$/i],
+  route53: [/^hostedzone\/[A-Z]?[*?]+$/i],
+  ec2: [/^instance\/i-[*?]+$/i, /^vpc\/vpc-[*?]+$/i, /^security-group\/sg-[*?]+$/i, /^subnet\/subnet-[*?]+$/i, /^volume\/vol-[*?]+$/i],
+  "cognito-idp": [/^userpool\/[a-z]{2}-[a-z]+-\d_[*?]+$/i],
+};
+
+/** True when the scope's resource part is a bare id-format prefix (see ID_PREFIX_FORMATS). */
+export function scopeIsIdPrefix(scope: string, service = ""): boolean {
+  if (scope === "*" || scope === TAGGED_AS_SELF) return false;
+  const formats = ID_PREFIX_FORMATS[service.toLowerCase()];
+  if (!formats) return false;
+  const rest = resourcePortion(scope);
+  return formats.some((re) => re.test(rest));
+}
+
+/**
  * True if a scope does NOT actually confine the grant to particular resources.
  *
  * The old test was `scope === "*"`, so anything else counted as confined and was
@@ -271,6 +306,9 @@ const UNTYPED_RESOURCE_SERVICES = new Set(["s3", "sns", "sqs"]);
 export function scopeIsUnbounded(scope: string, service = ""): boolean {
   if (scope === "*" || scope.length === 0) return true;
   if (scope === TAGGED_AS_SELF) return false;
+  // Fix 5b: a bare id-format prefix (`apps/d*`, `instance/i-*`) is a name pattern in shape
+  // only — it matches every resource of the type, so it narrows nothing.
+  if (scopeIsIdPrefix(scope, service)) return true;
   let rest = resourcePortion(scope);
   if (!UNTYPED_RESOURCE_SERVICES.has(service.toLowerCase())) {
     rest = rest.replace(/^[a-z0-9-]+[/:]/, "");
@@ -292,12 +330,30 @@ export function scopeIsUnbounded(scope: string, service = ""): boolean {
   return first === undefined || /^[*?]+$/.test(first);
 }
 
-// KNOWN LIMIT, and not solvable syntactically: a pattern can be a genuine name prefix and
-// still match everything, because AWS ids have fixed prefixes — `instance/i-*` matches
-// every EC2 instance, `userpool/eu-west-1_*` every pool in the region. Nothing in the ARN
-// distinguishes that from `table/CrewPoppy*`, which really does narrow. Recognising it
-// would need a per-service table of id formats. Documented in docs/specs/tag-adoption.md
-// rather than papered over.
+// The former KNOWN LIMIT — `instance/i-*` matching every instance while reading like a
+// name — is now addressed by ID_PREFIX_FORMATS above (rating-reconciliation.md fix 5b): a
+// per-service table of id formats, added to rather than guessed at, so an unlisted
+// service still errs on the side of "this is a name" exactly as before.
+
+/**
+ * True when an IAM grant can only ever touch ROLES: every action names a role (CreateRole,
+ * PassRole, PutRolePolicy, TagRole, PutRolePermissionsBoundary, …) and the scope is a role
+ * ARN pattern. A permissions boundary caps roles and nothing else, so this is exactly the
+ * set the boundary-capped register may apply to; one user-, group- or policy-class action
+ * keeps the grant on the control-plane path.
+ */
+export function grantIsRoleOnly(grant: PermissionGrant): boolean {
+  if (grant.service.toLowerCase() !== "iam") return false;
+  const scope = grant.resourceScope;
+  const roleScope = scope === TAGGED_AS_SELF || /:role\//i.test(scope);
+  if (!roleScope) return false;
+  if (grant.actions.length === 0) return false;
+  return grant.actions.every((a) => {
+    const bare = bareAction(a);
+    if (bare === "*" || a.endsWith(":*")) return false;
+    return /role/.test(bare);
+  });
+}
 
 /** One plain-language line describing a grant's blast radius. */
 export function describeGrant(grant: PermissionGrant): string {
@@ -397,13 +453,26 @@ export function maxRisk(a: RiskLevel, b: RiskLevel): RiskLevel {
  * compromise unrelated services in the account. Tag-scoped grants are safe;
  * read-only is softer than mutating; a genuine ARN pattern sits between.
  */
-export function assessGrant(grant: PermissionGrant): GrantRisk {
+export function assessGrant(grant: PermissionGrant, ctx: RatingContext = {}): GrantRisk {
   const svc = grant.service.toUpperCase();
   const mutates = grantCanMutate(grant);
   const tag = grantIsTagScoped(grant);
   const controlPlane = CONTROL_PLANE.has(grant.service.toLowerCase());
   const secrets = grantExposesSecrets(grant);
   const unbounded = !tag && scopeIsUnbounded(grant.resourceScope, grant.service);
+
+  // Fix 5b's honest register: an id-prefix scope with a DISCLOSED reason (the listing gate
+  // requires ≥ 40 characters owning up to the practical reach) rates medium — AWS offers
+  // nothing to hold on this resource type, and the poppy's own disclosed checks are the
+  // guard — never green, and never the silent "confined" it read as before. Undisclosed,
+  // it falls through and rates as the unbounded grant it is.
+  if (!tag && scopeIsIdPrefix(grant.resourceScope, grant.service) && (grant.reason ?? "").trim().length >= 40) {
+    return {
+      level: "medium",
+      scoped: false,
+      reason: `Can ${grantCanDestroy(grant) ? "change and delete" : mutates ? "create" : "read"} ${svc} resources matching ${grant.resourceScope} — in practice any of them, because every ${svc} id starts that way. AWS gives nothing narrower to hold here; the app's own disclosed checks are the guard.`,
+    };
+  }
 
   // Reaches every resource of the type. The branches below are ordered worst-first,
   // and the secret clause is APPENDED rather than being a branch of its own: a grant
@@ -488,6 +557,18 @@ export function assessGrant(grant: PermissionGrant): GrantRisk {
   // whatever its name. This used to be checked only for wildcard scopes, so exactly
   // the grants that matter — an `iam:` grant with a name pattern — skipped it.
   if (mutates && controlPlane) {
+    // boundary-capped-rating.md: when the deployed broker role provably refuses any
+    // CreateRole without the AgentsPoppyBoundary (ctx from the live setup read, never a
+    // file), a ROLE-ONLY grant is capped by AWS — the identity it creates can never exceed
+    // the boundary, whatever is attached to it later. Only role actions on a role scope
+    // qualify: users, groups and customer policies are not capped by a role boundary.
+    if (ctx.boundaryEnforced === true && grant.service.toLowerCase() === "iam" && grantIsRoleOnly(grant)) {
+      return {
+        level: "medium",
+        scoped: true,
+        reason: `Can create roles for its own functions ${where} — every one capped by your AgentsPoppyBoundary, enforced by AWS: no role it creates can ever exceed that ceiling, whatever is attached to it later.`,
+      };
+    }
     return {
       level: "high",
       scoped: true,
@@ -515,8 +596,8 @@ export function assessGrant(grant: PermissionGrant): GrantRisk {
  * developers toward tightly-scoped, tagged policies). The overall {@link PolicyRisk.level}
  * is the worst of the per-grant levels and any set-level warning.
  */
-export function assessPermissionSet(ps: PermissionSet): PolicyRisk {
-  const grants = ps.grants.map((grant) => ({ grant, risk: assessGrant(grant) }));
+export function assessPermissionSet(ps: PermissionSet, ctx: RatingContext = {}): PolicyRisk {
+  const grants = ps.grants.map((grant) => ({ grant, risk: assessGrant(grant, ctx) }));
   let level: RiskLevel = grants.reduce<RiskLevel>((acc, g) => maxRisk(acc, g.risk.level), "low");
 
   const warnings: string[] = [];

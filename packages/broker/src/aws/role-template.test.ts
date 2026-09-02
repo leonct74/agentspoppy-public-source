@@ -172,11 +172,36 @@ describe("broker role v2 — the escalation groundwork", () => {
     }
   });
 
-  // Step 1 must break nothing. A Deny on unbounded CreateRole would stop three shipping
-  // poppies deploying; the boundary only becomes mandatory once every poppy references it.
-  it("does NOT yet require the boundary — nothing may depend on it in this step", () => {
-    const json = JSON.stringify(tpl());
-    expect(json).not.toContain("iam:PermissionsBoundary");
+  // Step 3 (template v5): the boundary is now REQUIRED. Landed only after an audit showed
+  // every shipping role-creating poppy already references the parameter (2026-09-02).
+  it("requires the boundary on every vended CreateRole — StringNotEquals, so 'no boundary' is refused too", () => {
+    const deny = guardrailStatements("AgentsPoppyBroker", "AgentsPoppyOperator").find(
+      (s) => s.Sid === "CreatedRolesMustCarryTheBoundary",
+    )!;
+    expect(deny.Effect).toBe("Deny");
+    expect(deny.Action).toEqual(["iam:CreateRole", "iam:PutRolePermissionsBoundary"]);
+    const cond = (deny.Condition as any).StringNotEquals["iam:PermissionsBoundary"];
+    expect(JSON.stringify(cond)).toContain(`policy/${BOUNDARY_POLICY_NAME}`);
+  });
+
+  it("refuses stripping a boundary once it is on", () => {
+    const deny = guardrailStatements("AgentsPoppyBroker", "AgentsPoppyOperator").find(
+      (s) => s.Sid === "CannotStripTheBoundary",
+    )!;
+    expect(deny.Effect).toBe("Deny");
+    expect(deny.Action).toBe("iam:DeleteRolePermissionsBoundary");
+  });
+
+  // The boundary body repeats the guardrails, so a role created UNDER the boundary cannot
+  // mint an unbounded role either — the cap is closed from the inside as well.
+  it("carries the boundary requirement inside the boundary body too", () => {
+    const sids = tpl().Resources.AgentsPoppyBoundary.Properties.PolicyDocument.Statement.map((s: any) => s.Sid);
+    expect(sids).toContain("CreatedRolesMustCarryTheBoundary");
+    expect(sids).toContain("CannotStripTheBoundary");
+  });
+
+  it("ships at or above the version the rating's boundaryEnforced probe requires", () => {
+    expect(TEMPLATE_VERSION).toBeGreaterThanOrEqual(5);
   });
 
   it("surfaces a template version, so the app can tell a user theirs is stale", () => {

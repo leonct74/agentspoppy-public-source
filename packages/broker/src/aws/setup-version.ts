@@ -42,7 +42,22 @@ export interface SetupVersionStatus {
   expected: number;
   /** Why we can't tell — surfaced to the user verbatim, so keep it plain. */
   reason?: string;
+  /**
+   * True ONLY when the deployed broker role provably carries the boundary Deny
+   * (template version ≥ {@link BOUNDARY_ENFORCED_SINCE}) — the rating's licence to
+   * call a poppy's role creates "capped" (docs/specs/boundary-capped-rating.md). It is
+   * derived from the live TemplateVersion output, never from what this host ships:
+   * an unreadable, pending, absent or older stack is `false`, and the chip stays honest-high.
+   */
+  boundaryEnforced: boolean;
 }
+
+/**
+ * The first template version whose broker role DENIES creating a role without the
+ * AgentsPoppyBoundary (broker-role-v2 step 3). Below it the boundary policy may exist
+ * but nothing requires it, so nothing is capped.
+ */
+export const BOUNDARY_ENFORCED_SINCE = 5;
 
 /** The outcome of trying to read the bootstrap stack, so the reasons stay honest. */
 export type SetupStackRead =
@@ -62,14 +77,14 @@ const PRE_VERSIONING = 1;
 
 export function setupVersionStatus(read: SetupStackRead, expected: number = TEMPLATE_VERSION): SetupVersionStatus {
   if (!read.ok) {
-    if (read.kind === "absent") return { state: "absent", deployed: null, expected };
-    if (read.kind === "pending") return { state: "pending", deployed: null, expected };
-    return { state: "unknown", deployed: null, expected, reason: read.reason };
+    if (read.kind === "absent") return { state: "absent", deployed: null, expected, boundaryEnforced: false };
+    if (read.kind === "pending") return { state: "pending", deployed: null, expected, boundaryEnforced: false };
+    return { state: "unknown", deployed: null, expected, reason: read.reason, boundaryEnforced: false };
   }
 
   const raw = read.outputs.TemplateVersion;
   if (raw === undefined || raw.trim() === "") {
-    return { state: "outdated", deployed: PRE_VERSIONING, expected };
+    return { state: "outdated", deployed: PRE_VERSIONING, expected, boundaryEnforced: false };
   }
 
   // A value we can't parse is NOT a reason to relax. Anything other than a plain
@@ -82,12 +97,18 @@ export function setupVersionStatus(read: SetupStackRead, expected: number = TEMP
       deployed: null,
       expected,
       reason: `the setup stack reports an unrecognised version ("${raw}")`,
+      boundaryEnforced: false,
     };
   }
 
   // A version NEWER than we ship is current, not stale: it means the app was
   // downgraded, and telling that user to "update" would roll their guardrails BACK.
-  return { state: parsed >= expected ? "current" : "outdated", deployed: parsed, expected };
+  return {
+    state: parsed >= expected ? "current" : "outdated",
+    deployed: parsed,
+    expected,
+    boundaryEnforced: parsed >= BOUNDARY_ENFORCED_SINCE,
+  };
 }
 
 /** Whether the user should be told. `absent`, `pending` and `current` stay silent. */

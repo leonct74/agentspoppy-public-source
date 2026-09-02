@@ -43,6 +43,9 @@ export interface ConnectionDetailViewProps {
   /** The machine gate's live state for this connection, reported by the running host —
    *  the ONLY thing that graduates the card's "Data exits" chip to Host-enforced. */
   machineGate?: "enforced" | "observed" | "none";
+  /** Live: the deployed broker role carries the boundary Deny (setup template ≥ 5) — the
+   *  ONLY thing that lets a role-only IAM grant rate "capped" instead of high. */
+  boundaryEnforced?: boolean;
   connection: Connection;
   inventory: Inventory;
   audit: AuditEntry[];
@@ -184,7 +187,7 @@ export function ConnectionDetailView(props: ConnectionDetailViewProps) {
   // before they ever type the confirm word.
   const footprint = props.infra ? summarizeFootprint(props.infra) : null;
   const stackNames = inventory.stacks.map((s) => s.stackName);
-  const risk = assessPermissionSet(c.permissionSet);
+  const risk = assessPermissionSet(c.permissionSet, { boundaryEnforced: props.boundaryEnforced === true });
   const hasFootprint = inventory.stacks.length > 0 || inventory.ledger.length > 0;
   // A revoked/blocked poppy can't run its own cleanup hook, but teardown is NEVER blocked:
   // the host's residual cleanup deletes everything still tagged as the poppy's, so the user
@@ -210,7 +213,7 @@ export function ConnectionDetailView(props: ConnectionDetailViewProps) {
   // all render the same findings from the same code. Grouped by MEANING, worst first, each
   // row opening to the exact actions behind it — this is the panel that replaces the
   // single verdict, and the reader may disagree with any one line.
-  const findings = buildFindings(c.permissionSet);
+  const findings = buildFindings(c.permissionSet, { boundaryEnforced: props.boundaryEnforced === true });
 
   // What each finding's services have ACTUALLY done, from the observed register — one line
   // per row, so the ceiling and the record sit together. Absent while loading/unreadable;

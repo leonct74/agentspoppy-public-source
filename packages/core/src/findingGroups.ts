@@ -14,6 +14,7 @@
  * describes the account, never the design (rule 6, and the founder's 2026-09-01 review:
  * "you made statements without meaning").
  */
+import type { RatingContext } from "./permissions";
 import {
   assessGrant,
   grantCanDestroy,
@@ -154,13 +155,13 @@ function scopeLineFor(grant: PermissionGrant): string {
  *              merged into ONE row, because there is nothing per-service to decide.
  *  - confined: everything scoped and unremarkable, merged into one row a reader can skip.
  */
-export function buildFindings(ps: PermissionSet): Finding[] {
+export function buildFindings(ps: PermissionSet, ctx: RatingContext = {}): Finding[] {
   const out: Finding[] = [];
   const forcedReads: PermissionGrant[] = [];
   const confined: PermissionGrant[] = [];
 
   for (const grant of ps.grants) {
-    const risk = assessGrant(grant);
+    const risk = assessGrant(grant, ctx);
     const svc = grant.service.toLowerCase();
     const noun = serviceNoun(svc);
     const wide = !grantIsTagScoped(grant) && scopeIsUnbounded(grant.resourceScope, grant.service);

@@ -5,8 +5,11 @@ item 4 the same day). Origin: an adversarial review by a parallel session. Outco
 fleet re-run: **all seven listed poppies pass the reconciled gate with ZERO manifest
 changes** — the two initially flagged (LiveOpsPoppy, CrewPoppy) were failing purely on
 the rater/compiler tag-write disagreement item 4 healed. Item 5b (per-service id formats
-+ the "guarded by disclosed code-level checks" register) remains committed to the next
-mechanism window.
++ the "guarded by disclosed code-level checks" register) landed 2026-09-02 in the same
+mechanism window as the boundary-capped rating: `ID_PREFIX_FORMATS` + `scopeIsIdPrefix` in
+`permissions.ts`, a disclosed id-prefix scope rates medium in its own register, an
+undisclosed one rates as the unbounded grant it is, and the listing gate keeps 5a's
+disclose-or-refuse contract.
 
 The theme of all five: **four authorities describe what a grant may do — AGENTS.md (the
 doctrine), `assessPermissionSet` (the rating), the policy compiler (the enforcement), and

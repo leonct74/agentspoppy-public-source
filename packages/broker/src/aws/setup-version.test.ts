@@ -78,3 +78,30 @@ describe("setupVersionStatus", () => {
     expect(setupVersionStatus(read({})).expected).toBe(TEMPLATE_VERSION);
   });
 });
+
+// boundary-capped-rating.md: the rating may call a poppy's role creates "capped" ONLY
+// when the DEPLOYED role provably carries the step-3 Deny — read live from the stack's
+// TemplateVersion output, never inferred from what this host ships.
+describe("boundaryEnforced — derived from the live template version, honest in every other state", () => {
+  it("is true from the version that introduced the Deny, and for anything newer", () => {
+    expect(setupVersionStatus({ ok: true, outputs: { TemplateVersion: "5" } }).boundaryEnforced).toBe(true);
+    expect(setupVersionStatus({ ok: true, outputs: { TemplateVersion: "9" } }).boundaryEnforced).toBe(true);
+  });
+
+  it("is false for every older stack — including the pre-versioning v1 with no output", () => {
+    expect(setupVersionStatus({ ok: true, outputs: { TemplateVersion: "4" } }).boundaryEnforced).toBe(false);
+    expect(setupVersionStatus({ ok: true, outputs: { TemplateVersion: "3" } }).boundaryEnforced).toBe(false);
+    expect(setupVersionStatus({ ok: true, outputs: {} }).boundaryEnforced).toBe(false);
+  });
+
+  it("is false whenever the stack could not be read — unknown is never 'capped'", () => {
+    expect(setupVersionStatus({ ok: false, kind: "absent" }).boundaryEnforced).toBe(false);
+    expect(setupVersionStatus({ ok: false, kind: "pending" }).boundaryEnforced).toBe(false);
+    expect(setupVersionStatus({ ok: false, kind: "unreadable", reason: "throttled" }).boundaryEnforced).toBe(false);
+    expect(setupVersionStatus({ ok: true, outputs: { TemplateVersion: "five" } }).boundaryEnforced).toBe(false);
+  });
+
+  it("ships from a version at or above the Deny's, so 'current' can imply 'capped'", () => {
+    expect(TEMPLATE_VERSION).toBeGreaterThanOrEqual(5);
+  });
+});

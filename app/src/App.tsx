@@ -50,6 +50,10 @@ const ENGINE_DOWN_MSG = "AgentsPoppy didn't start properly. Please close and reo
 
 export function App() {
   const [accounts, setAccounts] = useState<ConnectedAccount[]>([]);
+  // The live fact that lets the rating call a poppy's role creates "capped": the deployed
+  // broker role carries the boundary Deny (setup template ≥ 5). Read from the stack, never
+  // assumed from what this app ships; false until proven (boundary-capped-rating.md).
+  const [boundaryEnforced, setBoundaryEnforced] = useState(false);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [view, setView] = useState<View>({ type: "list" });
   // Bumped whenever setup may have changed, so the staleness banner re-checks instead of
@@ -180,6 +184,11 @@ export function App() {
       setConnections(c);
       setError(null);
       refreshActivity();
+      // Best-effort, never blocking the list: an unreadable setup simply keeps "false".
+      void broker
+        .setupStatus()
+        .then((st) => setBoundaryEnforced(st.boundaryEnforced === true))
+        .catch(() => setBoundaryEnforced(false));
       refreshApprovals();
       refreshExtensions();
       void refreshAwsHealth(a);
@@ -508,6 +517,7 @@ export function App() {
 
         {view.type === "list" && (
           <ConnectionsView
+            boundaryEnforced={boundaryEnforced}
             groups={groupConnectionsByAccount(accounts, connections)}
             activity={activity}
             onSelect={(id) => setView({ type: "detail", id })}
@@ -593,6 +603,7 @@ export function App() {
             blockedExtensionIds={extensions.filter((e) => e.backend === "blocked").map((e) => e.extensionId)}
             onUpdatePolicy={() => setView({ type: "connect", action: "update-policy" })}
             machineGateFor={(connectionId) => extensions.find((e) => e.connectionId === connectionId)?.machineGate}
+            boundaryEnforced={boundaryEnforced}
           />
         )}
 
@@ -634,6 +645,7 @@ export function App() {
               }
             >
               <ExtensionContainer
+                boundaryEnforced={boundaryEnforced}
                 extensionId={id}
                 connections={connections}
                 runtime={extensions.find((e) => e.extensionId === id) ?? null}
@@ -696,6 +708,7 @@ function DetailContainer({
   blockedExtensionIds,
   onUpdatePolicy,
   machineGateFor,
+  boundaryEnforced,
 }: {
   id: string;
   onBack: () => void;
@@ -711,6 +724,8 @@ function DetailContainer({
   /** The machine gate's state for a connection, from the live extension list — the only
    *  source the card may graduate a declaration on (docs/specs/machine-gate.md). */
   machineGateFor: (connectionId: string) => "enforced" | "observed" | "none" | undefined;
+  /** Live: the deployed broker role carries the boundary Deny (rating graduates on it). */
+  boundaryEnforced: boolean;
 }) {
   const [connection, setConnection] = useState<Connection | null>(null);
   const [inventory, setInventory] = useState<Inventory | null>(null);
@@ -940,6 +955,7 @@ function DetailContainer({
     <ConnectionDetailView
       connection={connection}
       machineGate={machineGateFor(connection.id)}
+      boundaryEnforced={boundaryEnforced}
       inventory={inventory}
       audit={audit}
       observed={observed}
@@ -994,11 +1010,14 @@ function ExtensionContainer({
   onAct,
   onBack,
   onManage,
+  boundaryEnforced,
 }: {
   extensionId: string;
   connections: Connection[];
   runtime: ExtensionRuntimeState | null;
   onAct: (fn: () => Promise<unknown>) => Promise<void>;
+  /** Live: the deployed broker role carries the boundary Deny (rating graduates on it). */
+  boundaryEnforced: boolean;
   onBack: () => void;
   /** Open this poppy's Manage (detail) view — the airlock header's governance jump. */
   onManage: (connectionId: string) => void;
@@ -1041,7 +1060,7 @@ function ExtensionContainer({
     // anything yet. Show WHO is asking and WHAT it declared (the scoped services +
     // the risk read), and make "review" the primary path when the scope is broad
     // (approving broad access should never be the biggest button on the screen).
-    const risk = assessPermissionSet(conn.permissionSet);
+    const risk = assessPermissionSet(conn.permissionSet, { boundaryEnforced });
     const services = [...new Set(conn.permissionSet.grants.map((g) => g.service))];
     const approve = (
       <button

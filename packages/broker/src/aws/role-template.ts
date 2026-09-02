@@ -39,7 +39,7 @@ export const DEFAULT_OPERATOR_NAME = "AgentsPoppyOperator";
  * idempotent UpdateStack, so a needless one costs nothing while a missed one leaves a user
  * without a guardrail they believe they have.
  */
-export const TEMPLATE_VERSION = 4;
+export const TEMPLATE_VERSION = 5;
 
 /** The permissions boundary that caps any role a poppy creates. */
 export const BOUNDARY_POLICY_NAME = "AgentsPoppyBoundary";
@@ -257,6 +257,34 @@ export function guardrailStatements(roleName: string, operatorName: string): Cfn
       Action: AUDIT_GUARDRAIL_ACTIONS,
       Resource: "*",
     },
+    {
+      // broker-role-v2 STEP 3 (template v5, docs/specs/boundary-capped-rating.md): every
+      // role a vended credential creates MUST carry the AgentsPoppyBoundary. A create (or a
+      // boundary swap) that names any other boundary — or none: StringNotEquals is TRUE when
+      // the key is absent, which is exactly the "no boundary at all" request — is refused by
+      // IAM itself. This is what lets the rating call a poppy's role creates "capped": a
+      // fact AWS enforces, not a word the manifest chose. Landed only once every shipping
+      // role-creating poppy referenced the boundary parameter (audited 2026-09-02) — the
+      // Deny before the fleet would have rolled back every Lambda deploy in updated accounts.
+      Sid: "CreatedRolesMustCarryTheBoundary",
+      Effect: "Deny",
+      Action: ["iam:CreateRole", "iam:PutRolePermissionsBoundary"],
+      Resource: "*",
+      Condition: {
+        StringNotEquals: {
+          "iam:PermissionsBoundary": sub(`arn:aws:iam::\${AWS::AccountId}:policy/${BOUNDARY_POLICY_NAME}`),
+        },
+      },
+    },
+    {
+      // The other half of "must carry": nothing vended may strip a boundary once it is on.
+      // (A stack DELETE removes the role itself and never calls this; a stack UPDATE that
+      // clears the parameter would call it and now rolls back — the intended refusal.)
+      Sid: "CannotStripTheBoundary",
+      Effect: "Deny",
+      Action: "iam:DeleteRolePermissionsBoundary",
+      Resource: "*",
+    },
   ];
 }
 
@@ -280,12 +308,12 @@ export function roleCloudFormationTemplate(input: RoleTemplateInput): object {
       // "attaching a policy that grants *:*" appears below — IAM cannot inspect a policy
       // document's CONTENTS in a condition, only its ARN.
       //
-      // DELIBERATELY INERT IN THIS STEP. Nothing requires it yet. A Deny on unbounded
-      // iam:CreateRole would break every poppy that creates roles — three shipping ones do
-      // — because their stacks name no boundary. And a poppy naming a boundary that does
-      // not exist yet fails for the opposite reason. So the policy must EXIST before
-      // anything references it, and nothing may REQUIRE it until everything does.
-      // See docs/specs/broker-role-v2.md.
+      // REQUIRED since template v5 (broker-role-v2 step 3): the guardrail
+      // CreatedRolesMustCarryTheBoundary refuses any vended CreateRole that does not name
+      // this policy. It stayed deliberately inert through v3/v4 until every shipping
+      // role-creating poppy referenced it (audited 2026-09-02) — the policy had to EXIST
+      // before anything referenced it, and nothing could REQUIRE it until everything did.
+      // See docs/specs/broker-role-v2.md and docs/specs/boundary-capped-rating.md.
       AgentsPoppyBoundary: {
         Type: "AWS::IAM::ManagedPolicy",
         Properties: {

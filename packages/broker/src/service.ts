@@ -221,7 +221,7 @@ export class BrokerService {
     const account = (await this.store.listAccounts())[0];
     // No AWS linked → there is nothing deployed to be stale, and asking anyway would send a
     // brand-new user's first launch on a scan of every AWS region to learn what we already know.
-    if (!account) return { state: "absent", deployed: null, expected: TEMPLATE_VERSION };
+    if (!account) return { state: "absent", deployed: null, expected: TEMPLATE_VERSION, boundaryEnforced: false };
     this.maintainFor(account);
     try {
       return await this.aws.readSetupVersion(regionFor(account));
@@ -231,6 +231,7 @@ export class BrokerService {
         deployed: null,
         expected: TEMPLATE_VERSION,
         reason: (err as Error).message?.trim() || "the setup stack could not be read",
+        boundaryEnforced: false,
       };
     }
   }

@@ -40,6 +40,8 @@ export interface SetupVersionStatus {
   expected: number;
   /** Plain-language why-we-can't-tell, shown to the user verbatim. */
   reason?: string;
+  /** True only when the deployed broker role provably carries the boundary Deny (template ≥ 5). */
+  boundaryEnforced?: boolean;
 }
 
 /** One poppy's observed activity: raw events (summarised in the view via core) + the window. */

@@ -294,7 +294,7 @@ what template v4 (`TEMPLATE_VERSION = 4`, `role-template.ts`) addresses. Full de
 `docs/specs/operator-key-least-privilege.md`.
 
 Before v4 the operator IAM user was **two doors, and only one had a guard**. It could
-`sts:AssumeRole` the broker role (where the five Deny guardrails and the boundary apply) —
+`sts:AssumeRole` the broker role (where the Deny guardrails — five in v4, seven from v5 — and the boundary apply) —
 *and* it carried, directly on the user, account-wide `cloudformation:DeleteStack` plus an
 S3/DynamoDB/Cognito/Lambda/Logs/SES/EventBridge delete set. Those direct powers sat on the
 *user*, where no guardrail is written, so a stolen key could destroy resources without ever
@@ -302,6 +302,23 @@ touching the role the whole mechanism is built to police.
 
 v4 collapses that to one guarded door. It does **not** touch I1–I6, the guardrails, or the
 boundary; it changes the operator user and the role's trust policy only:
+
+> **Template v5 (2026-09-02, broker-role-v2 step 3 — `docs/specs/boundary-capped-rating.md`).**
+> Two guardrails join the five: `CreatedRolesMustCarryTheBoundary` — a Deny on
+> `iam:CreateRole` and `iam:PutRolePermissionsBoundary` conditioned
+> `StringNotEquals { iam:PermissionsBoundary: <AgentsPoppyBoundary arn> }`, so a create that
+> names any other boundary, or none (the key is absent, and NotEquals is true for an absent
+> key), is refused by IAM — and `CannotStripTheBoundary`, a Deny on
+> `iam:DeleteRolePermissionsBoundary`. Both live in `guardrailStatements`, so they sit in the
+> role AND in the boundary body: a role created under the boundary cannot mint an unbounded
+> role either. The polarity matters and is the constraint step 2's probe recorded: the
+> requirement Deny is NotEquals on the condition key; the TAMPER Deny stays resource-scoped
+> to the policy ARN — an Equals-shaped Deny on the key would refuse exactly the good calls.
+> **This is what lets the rating (I6) call a role-only IAM grant "capped": `assessGrant`
+> graduates it to medium ONLY under `RatingContext.boundaryEnforced`, which the app derives
+> from the live stack's `TemplateVersion ≥ 5` (`setup-version.ts`), never from a manifest or
+> from what this host ships. Existing users receive the Deny through the standard
+> "update setup" banner (v4 stacks now read as outdated).**
 
 - **Operator inline policy → assume-only.** `MonitorAndTeardown` + `HostResidualCleanup` are
   removed from the user and now travel as the **session policy** of a broker-role session

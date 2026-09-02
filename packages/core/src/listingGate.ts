@@ -82,6 +82,21 @@ export function assessListing(ps: PermissionSet): ListingAssessment {
   problems.push(...risk.warnings.map((w) => `assessor warning: ${w}`));
 
   for (const g of ps.grants) {
+    // Fix 5b made id-prefix scopes rate as the unbounded grants they are; fix 5a's
+    // contract still holds here: blessed WITH a substantive disclosure, refused without.
+    // Handled first so the unscoped-destroy rule below never fires on a disclosed one.
+    const reach = idPrefixReach(g);
+    if (reach) {
+      notes.push(`${label(g)} — id-prefix scope: reads as narrow but practically reaches ${reach}.`);
+      if (!hasSubstantiveReason(g, ID_PREFIX_REASON_MIN)) {
+        problems.push(
+          `${label(g)} — an id-prefix scope practically reaches ${reach}, so its \`reason\` must own up to that ` +
+            `in the user's language (≥ ${ID_PREFIX_REASON_MIN} chars). Add the disclosure.`,
+        );
+      }
+      continue;
+    }
+
     const scoped = grantIsTagScoped(g) || !scopeIsUnbounded(g.resourceScope, g.service);
 
     if (!scoped && grantCanDestroy(g)) {
@@ -117,18 +132,6 @@ export function assessListing(ps: PermissionSet): ListingAssessment {
       continue;
     }
 
-    const reach = idPrefixReach(g);
-    if (reach) {
-      // ALWAYS state the practical reach — the disclosure lives in the log even when
-      // the reason is good, so no reviewer or CI reader can miss it.
-      notes.push(`${label(g)} — id-prefix scope: rates as narrow but practically reaches ${reach}.`);
-      if (!hasSubstantiveReason(g, ID_PREFIX_REASON_MIN)) {
-        problems.push(
-          `${label(g)} — an id-prefix scope practically reaches ${reach}, so its \`reason\` must own up to that ` +
-            `in the user's language (≥ ${ID_PREFIX_REASON_MIN} chars). Add the disclosure.`,
-        );
-      }
-    }
   }
 
   return { problems, notes };
