@@ -25,7 +25,8 @@
 
 import { describe, it, expect } from "vitest";
 import { grantCanDestroy, grantCanMutate, assessGrant, compilerTreatsAsBirth } from "@agentspoppy/core";
-import { qualifyActions } from "./policy";
+import type { PermissionGrant } from "@agentspoppy/core";
+import { qualifyActions, statementForGrant } from "./policy";
 
 /**
  * The compiler's own birth classifier — IMPORTED, not re-implemented. This function used to
@@ -114,5 +115,56 @@ describe("I6 — the rating's additive bucket never outruns the compiler's birth
   it("an ordinary create still reaches the additive bucket", () => {
     expect(ratingTreatsAsAdditive("cognito-idp", "CreateUserPool")).toBe(true);
     expect(compilerTreatsAsCreate("cognito-idp", "CreateUserPool")).toBe(true);
+  });
+});
+
+// The SECOND mechanical half of I6 (rating-reconciliation.md fix 4): tag writes. The
+// compiler conditions every unnarrowed tag write on a covered service — a poppy provably
+// cannot claim or strip a foreign resource's label — and refuses to vend one on a service
+// the shared table has not cleared. The rating must agree in BOTH directions: covered ⇒
+// not destroy-class (a red for the impossible is the false-green bug, pointing the other
+// way); uncovered ⇒ still destroy-class (the compiler refuses it, and red is the honest
+// description of a manifest shape that cannot ship).
+describe("tag writes: the rating and the compiler read ONE table (fix 4)", () => {
+  const covered: PermissionGrant = {
+    service: "cognito-idp",
+    actions: ["CreateUserPool", "DescribeUserPool", "TagResource", "UntagResource"],
+    resourceScope: "arn:aws:cognito-idp:*:*:userpool/*",
+  };
+
+  it("a covered tag write is NOT destroy-class, and the reason says why", () => {
+    // The compiler vends this grant (conditioned statements, no throw)…
+    expect(() => statementForGrant(covered, "com.example.app", 0)).not.toThrow();
+    // …so the rating must not claim it can change what exists.
+    expect(grantCanDestroy(covered)).toBe(false);
+    expect(grantCanMutate(covered)).toBe(true); // it still writes — supervision logic unchanged
+    const risk = assessGrant(covered);
+    expect(risk.level).toBe("medium");
+    expect(risk.reason).toContain("claim or release its own label");
+  });
+
+  it("an UNCOVERED service's tag write stays destroy-class — and the compiler refuses it, so both sides say no", () => {
+    const uncovered: PermissionGrant = { service: "s3", actions: ["PutBucketTagging"], resourceScope: "*" };
+    expect(grantCanDestroy(uncovered)).toBe(true);
+    expect(() => statementForGrant(uncovered, "com.example.app", 0)).toThrow(/TAG_WRITE_RULES|tag/i);
+  });
+
+  it("a wildcard action never earns the tag-write exemption", () => {
+    expect(grantCanDestroy({ service: "cognito-idp", actions: ["*"], resourceScope: "*" })).toBe(true);
+  });
+
+  it("the two sides literally share the table — identity, not resemblance", async () => {
+    const core = await import("@agentspoppy/core");
+    const policyModule = await import("./policy");
+    // policy.ts re-exports nothing of the table; the import above compiles only if the
+    // module resolves — the real assertion is that policy.ts has NO local table left.
+    const src = (await import("node:fs")).readFileSync(
+      new URL("./policy.ts", import.meta.url),
+      "utf8",
+    );
+    expect(src).not.toMatch(/const TAG_WRITE_RULES/);
+    expect(src).not.toMatch(/const TAG_WRITE_ACTION\s*=/);
+    expect(core.TAG_WRITE_RULES["cognito-idp"]).toBeDefined();
+    void policyModule;
   });
 });

@@ -36,9 +36,11 @@ import {
   scopeIsUnbounded,
   sidPart,
   SPREAD_BIRTHS,
+  TAG_WRITE_ACTION,
+  TAG_WRITE_RULES,
   TAGGED_AS_SELF,
 } from "@agentspoppy/core";
-import type { ConnectedAccount, Connection, PermissionGrant } from "@agentspoppy/core";
+import type { ConnectedAccount, Connection, PermissionGrant, TagWriteRules } from "@agentspoppy/core";
 
 /** Audit tag recording which connection created a resource (NOT used for ownership). */
 export const CONNECTION_TAG_KEY = "agentspoppy:connection";
@@ -59,81 +61,11 @@ export const APP_TAG_KEY = "agentspoppy:app";
 // A tagged-as-self grant is already conditioned on `aws:ResourceTag`, so it can only tag
 // what is already its own.
 
-/** Tag-WRITE actions, generically. Tag READS (List…, Get…, Describe…) never match. */
-// Deliberately BROAD. A name this misses compiles unconditioned, which is the hole; a name
-// it over-matches is refused, which is loud and fixable. AWS spells the same idea at least
-// six ways — TagResource, CreateTags, AddTags (sagemaker, es, elasticmapreduce),
-// AddTagsToResource, PutBucketTagging, TagRole — and a detector written to the two or three
-// that came to mind first would have let sagemaker:AddTags through silently.
-// CASE-INSENSITIVE, and that is load-bearing rather than cosmetic. IAM matches the Action
-// element case-insensitively, so `cognito-idp:tagresource` grants exactly what
-// `cognito-idp:TagResource` grants — but a capitalised, anchored detector does not see it,
-// and the grant falls through to the unconditioned path. A security detector reading
-// attacker-supplied text must not fail open on a one-letter change. (Contrast
-// permissions.ts's create filter, which is deliberately case-SENSITIVE because it mirrors
-// this compiler character-for-character; that one is descriptive, this one is enforcement.)
-const TAG_WRITE_ACTION =
-  /^(Tag|Untag|AddTags|RemoveTags|CreateTags|DeleteTags|SetTags|PutTags|ChangeTags|PutBucketTagging|DeleteBucketTagging)/i;
-
-/**
- * How a service's tag writes are allowed to be conditioned.
- *
- * This table is per-service and MUST stay that way. A condition key a service does not
- * populate can never be satisfied, so emitting one turns an Allow into a permanent Deny —
- * a deploy that breaks in the user's own account, discovered by them. Every entry here was
- * checked against the AWS Service Authorization Reference for the exact action.
- *
- * NOT LISTED = REFUSED. s3 is the worked example: `s3:PutBucketTagging` supports neither
- * `aws:RequestTag` nor `aws:ResourceTag`, so both shapes below would deny every bucket tag
- * write forever. S3 tag writes must be name-scoped, which every shipped poppy already does.
- */
-interface TagWriteRules {
-  /** Bare action names that add or overwrite tags. */
-  add: string[];
-  /** Bare action names that remove tags. These NEVER get a request-tag condition: no tags
-   *  ride along on a removal, so the key is unpopulated and the condition is a deny. */
-  remove: string[];
-  /**
-   * `create-action` — the service can prove the tag write is part of a create call, so the
-   *                   standalone claim path is removed entirely. No residual gap.
-   * `none`          — PROVEN, per service, that AWS populates `aws:ResourceTag` with the
-   *                   SUBMITTED tags during a tag-on-create. The re-tag-your-own statement
-   *                   therefore authorises creates on its own, and a claim statement would
-   *                   add nothing except the ability to claim an untagged resource. Also
-   *                   no residual gap.
-   * `request-tag`   — not yet proven for this service. Claim only something not already
-   *                   claimed. Works, but LEAVES A RESIDUAL: a resource the user created
-   *                   by hand carries no attribution tag and so counts as unclaimed.
-   */
-  claim: "create-action" | "request-tag" | "none";
-}
-
-const TAG_WRITE_RULES: Record<string, TagWriteRules> = {
-  // ec2:CreateAction is populated ONLY when CreateTags is evaluated as the tagging half of
-  // a create call, and is absent when CreateTags is called directly — AWS: "users are not
-  // permitted to tag any existing resources". It is NOT listed on DeleteTags (a delete is
-  // never part of a create), so it must never be applied there.
-  ec2: { add: ["CreateTags"], remove: ["DeleteTags"], claim: "create-action" },
-  // PROVEN live (canary, 26 Aug 2026): a pool created WITH tags succeeds under a policy
-  // carrying NO claim statement, so aws:ResourceTag really is populated with the submitted
-  // tags during the dependent TagResource check. The claim statement was therefore doing
-  // nothing for creates — its only remaining effect was to permit claiming an UNTAGGED
-  // pool, which the same run confirmed was possible. Dropping it closes that gap at no
-  // cost. See docs/specs/tag-adoption-canary.md.
-  "cognito-idp": { add: ["TagResource"], remove: ["UntagResource"], claim: "none" },
-  // PROVEN live (canary, 26 Aug 2026), all three parts — the founder authorised briefly
-  // enabling a detector for it, and it was deleted immediately afterwards. Creating a
-  // filter carrying its own tag succeeded with no claim statement; claiming an UNTAGGED
-  // filter was DENIED without the statement and ALLOWED with it; re-tagging its own kept
-  // working. Same shape as cognito-idp and amplify.
-  guardduty: { add: ["TagResource"], remove: ["UntagResource"], claim: "none" },
-  // PROVEN live (canary, 26 Aug 2026), BOTH halves — which is the only kind of proof that
-  // counts here. Creating an app with its own tag succeeded under a policy carrying no
-  // claim statement; and claiming an UNTAGGED app it did not create was DENIED without the
-  // statement and ALLOWED with it, with the app's real tags confirming both. So the
-  // statement was not authorising creates, only enabling the takeover.
-  amplify: { add: ["TagResource"], remove: ["UntagResource"], claim: "none" },
-};
+// The tag-write detector (TAG_WRITE_ACTION) and the per-service TAG_WRITE_RULES table now
+// live in @agentspoppy/core/src/tagWriteActions.ts — ONE table, read by this compiler AND
+// by the rating (rating-reconciliation.md fix 4; the birthActions.ts pattern, for the same
+// I6 reason). Their content — including every canary proof comment — moved verbatim; the
+// tag-adoption.test.ts suite running unchanged pins that nothing but the address changed.
 
 /** Bare action name, without the optional `service:` prefix. */
 function bareName(action: string): string {

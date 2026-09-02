@@ -40,9 +40,12 @@ describe("bucketActions — the drill-down a reader actually scans", () => {
 describe("buildFindings — grouped by meaning, worst first", () => {
   it("titles claim only what the buckets back — no delete in the headline when nothing deletes", () => {
     // Cognito's wide grant creates and labels; it deletes nothing. "change and delete"
-    // here was the exact overstatement the founder called out.
+    // here was the exact overstatement the founder called out — and since fix 4
+    // (rating-reconciliation.md), the labelling half no longer counts as "change"
+    // either: cognito-idp's TagResource is compiled with conditions, so it can only
+    // claim or release the poppy's own label. The honest headline is the create one.
     const f = buildFindings(ps([{ service: "cognito-idp", actions: ["CreateUserPool", "TagResource"], resourceScope: "*" }]));
-    expect(f[0].title).toBe("Can change sign-in directories you did not create");
+    expect(f[0].title).toBe("Can create new sign-in directories in your account");
     const del = buildFindings(ps([{ service: "route53", actions: ["ChangeResourceRecordSets"], resourceScope: "*" }]));
     expect(del[0].title).toBe("Can change and delete DNS records you did not create");
   });

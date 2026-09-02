@@ -14,6 +14,7 @@
  */
 import { TAGGED_AS_SELF } from "./types";
 import { grantHasReferencedLeg } from "./birthActions";
+import { compiledTagWriteConfined } from "./tagWriteActions";
 import { grantCannotBeNarrowed } from "./awsNarrowing";
 import type { ConnectedAccount, Connection, PermissionGrant, PermissionSet } from "./types";
 
@@ -194,9 +195,20 @@ export function grantCanMutate(grant: PermissionGrant): boolean {
  * True if the grant can change or DESTROY resources that already exist (not merely
  * create new ones). This is what separates "can harm the rest of your account" from
  * "can only add new resources".
+ *
+ * A tag write the COMPILER conditions is excluded (rating-reconciliation.md fix 4,
+ * I6): under the vended policy it can only claim or release the poppy's own label —
+ * never touch a foreign resource — so counting it as destroy-class claimed a power
+ * the compiled policy makes impossible. The fail-safe direction survives by
+ * construction: a wildcard action, or a tag write on a service the shared table has
+ * not cleared, still counts (and the compiler refuses to vend the uncovered case, so
+ * red is also its honest rating). One table, read by both sides — see
+ * tagWriteActions.ts and rating-matches-compiler.test.ts.
  */
 export function grantCanDestroy(grant: PermissionGrant): boolean {
-  return grant.actions.some((a) => classifyAction(a) === "destructive");
+  return grant.actions.some(
+    (a) => classifyAction(a) === "destructive" && !compiledTagWriteConfined(grant.service, a),
+  );
 }
 
 /** True if the grant can bring new resources into existence that teardown cannot see. */
@@ -432,10 +444,15 @@ export function assessGrant(grant: PermissionGrant): GrantRisk {
       };
     }
     if (mutates) {
+      // A covered tag write reaches this branch (it is no longer destroy-class), and
+      // the sentence owes the reader the WHY: the compiled policy conditions it.
+      const tagNote = grant.actions.some((a) => compiledTagWriteConfined(grant.service, a))
+        ? ` Its tag writes are compiled with conditions: it can only claim or release its own label, never another resource's.`
+        : "";
       return {
         level: secrets ? "high" : "medium",
         scoped: false,
-        reason: `Can create new ${svc} resources in your account, but cannot change or delete anything that already exists.${alsoSecrets}${awsNote}`,
+        reason: `Can create new ${svc} resources in your account, but cannot change or delete anything that already exists.${tagNote}${alsoSecrets}${awsNote}`,
       };
     }
     if (secrets) {

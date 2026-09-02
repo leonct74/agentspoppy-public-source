@@ -135,6 +135,7 @@ rating in the same commit.
 | `packages/broker/src/aws/policy.ts` | Compiles grants → session policy. **The mechanism's heart.** |
 | `packages/broker/src/aws/sts.ts` | Assumes the role with that policy + transitive attribution session tags. Also **verifies the managed scope policy's contents** before binding a session to it (large scopes are referenced by ARN, and an ARN is only a name). |
 | `packages/core/src/permissions.ts` | `assessPermissionSet` — the rating shown at approval (I6's other half). |
+| `packages/core/src/tagWriteActions.ts` | The tag-write detector + per-service conditioning table (I2's precondition), moved here 2026-09-02 so the compiler and the rating read ONE table (the birthActions.ts pattern; rating-reconciliation.md fix 4). Content changes here are mechanism changes exactly as they were inside policy.ts. |
 | `packages/broker/src/aws/tagging.ts`, `deletion.ts` | The tag sweep + typed deletion behind teardown (I4). |
 | `scripts/certify.ts`, `packages/broker/src/certify.ts` | The leaves-no-trace proof harness (I4's audit). |
 

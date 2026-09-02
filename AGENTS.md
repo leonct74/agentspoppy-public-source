@@ -150,9 +150,22 @@ platform patches touching its enforcement points are checked against that docume
   >   grant's whole blast radius is "could add a child to a pool it doesn't own" — it can never
   >   read, change or delete anything foreign.
 - **`*` is allowed only for** (a) pure **creates** that have no ARN to scope to (e.g.
-  `cognito-idp:CreateUserPool`) — creating is additive, it can't harm what exists — or (b) services
-  with **no resource-level permissions at all** (e.g. SES `SendEmail`, Route53
-  `ChangeResourceRecordSets`). Reads on `*` are fine.
+  `cognito-idp:CreateUserPool`) — creating is additive, it can't harm what exists — or (b) actions
+  AWS publishes **no resource types for**, so `"*"` is the only value that authorises them
+  (account-level settings like `ses:PutAccountDetails`; the generated
+  `awsForcedActions.ts` table, built from AWS's own service reference, is the authority on
+  which actions these are — never this document's memory). Reads on `*` are fine.
+  > ⚠️ **Route 53 `ChangeResourceRecordSets` is NOT in class (b)** — an earlier version of
+  > this handbook said it was, and the assessor rightly rated the handbook's own example
+  > red. It authorises against a **hosted-zone ARN**
+  > (`arn:aws:route53:::hostedzone/<Id>`): scope it to the concrete zone where you know it,
+  > or to `hostedzone/Z*` where the zone can't be known in advance — an id-prefix shape
+  > (all zone ids start with `Z`), so the listing gate requires your `reason` to own up to
+  > its practical reach. AWS also offers **record-level condition keys**
+  > (`route53:ChangeResourceRecordSetsNormalizedRecordNames`, `…RecordTypes`, `…Actions`)
+  > that can pin the grant to specific record names and types — tighter than any ARN; the
+  > broker does not compile them yet, but nothing stops your reason from promising what
+  > your code enforces.
 - **Least privilege.** Declare the _specific actions_ you need, not `service:*`. Over-asking is a
   defect — it alarms the user reviewing your extension and it's a code-review failure.
 
@@ -228,8 +241,8 @@ platform patches touching its enforcement points are checked against that docume
   {
     "service": "route53",
     "actions": ["ChangeResourceRecordSets"],
-    "resourceScope": "*",
-    "reason": "Points the web address you typed at your site — after showing you what that address points at today, and only once you approve that exact change."
+    "resourceScope": "arn:aws:route53:::hostedzone/Z*", // the action scopes to a hosted zone — "*" was this handbook's old, wrong advice
+    "reason": "Points the web address you typed at your site — after showing you what that address points at today, and only once you approve that exact change. In practice this scope reaches any DNS zone in the account (every zone id starts with Z); the app only ever writes the one record you approved."
   }
   ```
 
