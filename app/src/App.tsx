@@ -54,6 +54,8 @@ export function App() {
   // broker role carries the boundary Deny (setup template ≥ 5). Read from the stack, never
   // assumed from what this app ships; false until proven (boundary-capped-rating.md).
   const [boundaryEnforced, setBoundaryEnforced] = useState(false);
+  // The deployed setup version, for the update screen's banner (null = unreadable).
+  const [deployedSetupVersion, setDeployedSetupVersion] = useState<number | null>(null);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [view, setView] = useState<View>({ type: "list" });
   // Bumped whenever setup may have changed, so the staleness banner re-checks instead of
@@ -187,8 +189,14 @@ export function App() {
       // Best-effort, never blocking the list: an unreadable setup simply keeps "false".
       void broker
         .setupStatus()
-        .then((st) => setBoundaryEnforced(st.boundaryEnforced === true))
-        .catch(() => setBoundaryEnforced(false));
+        .then((st) => {
+          setBoundaryEnforced(st.boundaryEnforced === true);
+          setDeployedSetupVersion(typeof st.deployed === "number" ? st.deployed : null);
+        })
+        .catch(() => {
+          setBoundaryEnforced(false);
+          setDeployedSetupVersion(null);
+        });
       refreshApprovals();
       refreshExtensions();
       void refreshAwsHealth(a);
@@ -578,6 +586,7 @@ export function App() {
           <ConnectAwsView
             accounts={accounts}
             initialAction={view.action}
+            deployedSetupVersion={deployedSetupVersion}
             onBack={() => {
               setView({ type: "list" });
               void refreshList();

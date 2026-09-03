@@ -41,6 +41,14 @@ export interface ConnectAwsViewProps {
   onChanged: () => void;
   /** Deep-link from the home "Manage AWS connection" panel: open straight into an action. */
   initialAction?: "change-creds" | "redeploy" | "update-policy";
+  /**
+   * The setup version CloudFormation reports for this account (null when unreadable). The
+   * update banner reads it to tell the truth for THIS account: from template version 2 the
+   * boundary already exists, so an update makes AWS enforce it rather than "adds" it — and
+   * the setup key that did the previous update already carries every permission this one
+   * needs, because nothing was added to the access policy after the boundary landed.
+   */
+  deployedSetupVersion?: number | null;
 }
 
 /**
@@ -48,7 +56,13 @@ export interface ConnectAwsViewProps {
  * narrative lives on the splash, not here). It creates a broker role plus a
  * dedicated NON-admin operator — AgentsPoppy never asks for or uses admin.
  */
-export function ConnectAwsView({ accounts, onBack, onChanged, initialAction }: ConnectAwsViewProps) {
+export function ConnectAwsView({
+  accounts,
+  onBack,
+  onChanged,
+  initialAction,
+  deployedSetupVersion = null,
+}: ConnectAwsViewProps) {
   // WIZARD is the default (founder direction 2026-08-11: the five-step stepper frustrated
   // most users — even we avoided testing it). Pro is the landing mode only for management
   // deep-links (change-creds / redeploy / update-policy) and for accounts already fully set
@@ -109,6 +123,16 @@ export function ConnectAwsView({ accounts, onBack, onChanged, initialAction }: C
    * "access policy", which the (unrelated) wrong-credentials message also contains.
    */
   const stalePolicyError = !!deployError && /iam:CreatePolicy/i.test(deployError);
+  /**
+   * The re-apply ran on the stored OPERATOR key. By design that key cannot touch the setup,
+   * so AWS answers with an AccessDenied naming AgentsPoppyOperator — meaningless to a person
+   * who has just typed a different key. Say what happened and what to do instead.
+   */
+  const operatorDeniedError = !!deployError && /user\/AgentsPoppyOperator is not authorized/i.test(deployError);
+  const deployErrorText = operatorDeniedError
+    ? "AgentsPoppy ran this with the key it keeps (AgentsPoppyOperator), which by design cannot change the setup. " +
+      "Enter your setup key above — your admin keys, or the IAM user carrying the AgentsPoppy access policy — and press Deploy setup again."
+    : deployError;
 
   // "Reused your existing setup" note after a cross-region join (second computer).
   const [deployNote, setDeployNote] = useState<string | null>(null);
@@ -278,7 +302,13 @@ export function ConnectAwsView({ accounts, onBack, onChanged, initialAction }: C
       // also covers the fresh-machine case: the broker derives + links the account.
       // (A re-apply reuses them too; if they're the non-admin operator the deploy
       // fails and the user can switch to "different credentials".)
-      const pasteKeys = useOwnKeys || !hasIdentity;
+      // ALSO when the stored key is the powerless operator: the form shows a key field for
+      // exactly that case (mustPasteForRedeploy), and the typed key MUST be what gets sent.
+      // Field report 2026-09-03 (first re-apply after the 0.3.9 operator switch, so every
+      // user was on this path): this rule predated mustPasteForRedeploy, silently dropped the
+      // typed key, and ran the update on the operator — whose refusal to even read the stack
+      // was all the user saw.
+      const pasteKeys = useOwnKeys || !hasIdentity || mustPasteForRedeploy;
       // On a re-apply, WHICH mode depends on what this machine is standing on
       // (docs/specs/operator-key-least-privilege.md, ordering §3):
       //  - operator key → touch the STACK only (updateOnly). Rotating the key here is
@@ -404,7 +434,80 @@ export function ConnectAwsView({ accounts, onBack, onChanged, initialAction }: C
     );
   }
 
-  const updateBanner = (
+  // From template version 2 the boundary policy already exists in the account (created by a
+  // key that therefore already carried the CreateBoundaryPolicy permissions, or by admin
+  // keys). Nothing was added to the access policy after that, so for these accounts the
+  // "replace your policy first" instruction is wrong: it sends a person with a perfectly
+  // capable key to the IAM console for nothing (field report 2026-09-03). The banner says
+  // what is true for THIS account; the pre-boundary text stays for accounts still on v1.
+  const boundaryAlreadyExists = (deployedSetupVersion ?? 0) >= 2;
+  const keyEntryStep = (
+    <li>
+      {/* Never tell someone to enter a key the app can already use. The stored key IS
+          reused — typing is only for when the stored key is the powerless operator (or
+          none resolves). Field report 2026-08-28: this said "enter the key below"
+          unconditionally, so a user whose stored key was perfectly capable went hunting
+          for a secret they never needed to re-type. */}
+      {hasIdentity && !connectedIsOperator ? (
+        <>
+          Press <strong>Deploy setup</strong> — AgentsPoppy uses the key it already has
+          {identity ? (
+            <>
+              {" "}
+              (<code>{identity.arn}</code>)
+            </>
+          ) : null}
+          , so there is <strong>nothing to re-enter</strong>. The update takes a few seconds.
+        </>
+      ) : boundaryAlreadyExists ? (
+        <>
+          <strong>Enter the setup key you used last time</strong> — your admin keys, or the IAM
+          user carrying the AgentsPoppy access policy — and press <strong>Deploy setup</strong>.
+          It is used once, held in memory, never written to disk, and the update takes a few
+          seconds. That key already carries every permission this update needs: nothing was
+          added to the access policy after the update that put the boundary in your account.
+        </>
+      ) : (
+        <>
+          Enter the key below and press <strong>Deploy setup</strong>. It is used once,
+          held in memory, never written to disk, and the update takes a few seconds.
+        </>
+      )}
+    </li>
+  );
+  const updateBanner = boundaryAlreadyExists ? (
+<div className="banner banner-warn policy-update">
+          <strong>Update the protections in your AWS account.</strong> This version makes AWS
+          itself enforce a safeguard your account already has: the permissions boundary{" "}
+          <code>AgentsPoppyBoundary</code>, a ceiling that caps any IAM role a connected app
+          creates. From now on AWS refuses any such role that does not carry it, and refuses
+          removing it — so an app can never build itself more power than your rules allow. The
+          protections live in your account, not in this app, so they change only when you
+          re-apply them. Your account, role, region and connected apps all stay exactly as they
+          are — nothing is recreated.
+          <ol className="substeps">
+            {keyEntryStep}
+            <li>
+              Only if AWS answers with a message naming <code>iam:CreatePolicy</code> is your copy
+              of the access policy older than the boundary. Then replace it — <CopyPolicyButton />{" "}
+              or{" "}
+              <ExtLink href={ACCESS_POLICY_URL}>
+                open it on GitHub <Icon name="external" className="link-ext" />
+              </ExtLink>
+              , under <strong>IAM → Users → your setup user</strong> — and press Deploy setup again.
+              AgentsPoppy shows that panel by itself when it happens.
+            </li>
+          </ol>
+          {connectedIsOperator && (
+            <p className="muted">
+              Why enter a key when AgentsPoppy already has one? Because the key it keeps is{" "}
+              <code>AgentsPoppyOperator</code> — a deliberately powerless user that <strong>cannot
+              modify the setup</strong>. That is exactly what stops a connected app rewriting its own
+              guardrails, so it is a property worth the extra step rather than a gap.
+            </p>
+          )}
+        </div>
+  ) : (
 <div className="banner banner-warn policy-update">
           <strong>Update the protections in your AWS account.</strong> This version adds a new
           safeguard — a permissions boundary named <code>AgentsPoppyBoundary</code>, a ceiling that
@@ -433,31 +536,7 @@ export function ConnectAwsView({ accounts, onBack, onChanged, initialAction }: C
               <strong>If you use your admin keys for setup:</strong> nothing to prepare — they
               already may do this.
             </li>
-            <li>
-              {/* Never tell someone to enter a key the app can already use. The stored key IS
-                  reused — typing is only for when the stored key is the powerless operator (or
-                  none resolves). Field report 2026-08-28: this said "enter the key below"
-                  unconditionally, so a user whose stored key was perfectly capable went hunting
-                  for a secret they never needed to re-type. */}
-              {hasIdentity && !connectedIsOperator ? (
-                <>
-                  Press <strong>Deploy setup</strong> — AgentsPoppy uses the key it already has
-                  {identity ? (
-                    <>
-                      {" "}
-                      (<code>{identity.arn}</code>)
-                    </>
-                  ) : null}
-                  , so there is <strong>nothing to re-enter</strong>. The update takes a few
-                  seconds.
-                </>
-              ) : (
-                <>
-                  Enter the key below and press <strong>Deploy setup</strong>. It is used once,
-                  held in memory, never written to disk, and the update takes a few seconds.
-                </>
-              )}
-            </li>
+            {keyEntryStep}
           </ol>
           {connectedIsOperator && (
             <p className="muted">
@@ -665,7 +744,7 @@ export function ConnectAwsView({ accounts, onBack, onChanged, initialAction }: C
                     </button>
                   </div>
                 )}
-                {deployError && <p className="inline-error">{deployError}</p>}
+                {deployError && <p className="inline-error">{deployErrorText}</p>}
                 <p className="micro muted">
                   Safe to interrupt: nothing elevated is stored. If it stops partway, just click Deploy again — it
                   picks up from wherever AWS actually got to.

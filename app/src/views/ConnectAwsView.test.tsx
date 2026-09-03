@@ -376,6 +376,84 @@ describe("ConnectAwsView", () => {
       render(<ConnectAwsView accounts={[linked]} onBack={() => {}} onChanged={() => {}} initialAction="redeploy" />);
     };
 
+    const linked = { ...account, roleArn: "arn:aws:iam::123456789012:role/AgentsPoppyBroker" };
+    const operatorFetch = (onBootstrap: () => Response) =>
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/aws/identity")) return jsonResponse(operator);
+        if (url.endsWith("/bootstrap") && init?.method === "POST") return onBootstrap();
+        return jsonResponse({}, 404);
+      });
+    const typeSetupKeyAndDeploy = async () => {
+      fireEvent.change(await screen.findByLabelText("Access Key ID"), { target: { value: "AKIASETUP" } });
+      fireEvent.change(screen.getByLabelText("Secret Access Key"), { target: { value: "setup-secret" } });
+      fireEvent.click(screen.getByRole("button", { name: "Deploy setup" }));
+    };
+
+    // Field report 2026-09-03 — the first re-apply after the 0.3.9 operator switch, i.e. EVERY
+    // user's path: the key form showed (the stored key is the operator), the user typed their
+    // setup key, and the app dropped it — the submit rule predated mustPasteForRedeploy — then
+    // ran the update on the operator, whose refusal to even read the stack was all they saw.
+    it("sends the TYPED setup key when the stored key is the operator (update-only, no key switch)", async () => {
+      const fetchMock = operatorFetch(() =>
+        jsonResponse({ brokerRoleArn: linked.roleArn, account: linked }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      render(
+        <ConnectAwsView accounts={[linked]} onBack={() => {}} onChanged={() => {}} initialAction="redeploy" deployedSetupVersion={4} />,
+      );
+      await screen.findByText(/Update the protections in your AWS account/i);
+      await typeSetupKeyAndDeploy();
+
+      await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith("/bootstrap"))).toBe(true));
+      const call = fetchMock.mock.calls.find(([u]) => String(u).endsWith("/bootstrap"))!;
+      const body = JSON.parse(String((call[1] as RequestInit).body));
+      // The typed key travels, the stack is touched in place, and the operator key is NOT rotated.
+      expect(body).toMatchObject({ accessKeyId: "AKIASETUP", secretAccessKey: "setup-secret", updateOnly: true });
+      expect(body.keysFirst).toBeUndefined();
+    });
+
+    // A refusal naming the operator is meaningless to someone who just typed a different key;
+    // it must read as what happened and what to do, not as a raw IAM denial.
+    it("explains a refusal that names the operator key instead of showing the raw AWS denial", async () => {
+      vi.stubGlobal(
+        "fetch",
+        operatorFetch(() =>
+          jsonResponse(
+            {
+              error: "aws_error",
+              message:
+                "User: arn:aws:iam::123456789012:user/AgentsPoppyOperator is not authorized to perform: " +
+                "cloudformation:DescribeStacks on resource: arn:aws:cloudformation:eu-west-1:123456789012:stack/AgentsPoppy/x",
+            },
+            500,
+          ),
+        ),
+      );
+      render(
+        <ConnectAwsView accounts={[linked]} onBack={() => {}} onChanged={() => {}} initialAction="redeploy" deployedSetupVersion={4} />,
+      );
+      await screen.findByText(/Update the protections in your AWS account/i);
+      await typeSetupKeyAndDeploy();
+      expect(await screen.findByText(/which by design cannot change the setup/i)).toBeTruthy();
+      expect(screen.queryByText(/not authorized to perform/i)).toBeNull();
+    });
+
+    // From template version 2 the boundary already exists in the account, so "replace your
+    // policy first" is wrong for these users (nothing was added to the policy after that): the
+    // banner must lead with the key entry and describe the update as AWS ENFORCING the ceiling.
+    it("for an account that already has the boundary, leads with the key entry, not the policy swap", async () => {
+      vi.stubGlobal("fetch", operatorFetch(() => jsonResponse({}, 404)));
+      render(
+        <ConnectAwsView accounts={[linked]} onBack={() => {}} onChanged={() => {}} initialAction="redeploy" deployedSetupVersion={4} />,
+      );
+      await screen.findByText(/Update the protections in your AWS account/i);
+      expect(screen.getByText(/makes AWS\s+itself enforce a safeguard your account already has/i)).toBeTruthy();
+      expect(screen.getByText(/Enter the setup key you used last time/i)).toBeTruthy();
+      expect(screen.queryByText(/replace that policy with the current\s+version/i)).toBeNull();
+      // The policy swap survives as the fallback for the one case it applies to.
+      expect(screen.getByText(/Only if AWS answers with a message naming/i)).toBeTruthy();
+    });
+
     // The update is its OWN screen now, not the onboarding wizard wearing a banner: no step
     // list, no "Create the broker role" heading, no Verify button to press by mistake.
     it("is a dedicated update screen, not the onboarding wizard", async () => {
