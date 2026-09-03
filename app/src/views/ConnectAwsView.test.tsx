@@ -438,6 +438,25 @@ describe("ConnectAwsView", () => {
       expect(screen.queryByText(/not authorized to perform/i)).toBeNull();
     });
 
+    // AWS's "security token is invalid" means the access key ID is unknown — deleted, usually on
+    // purpose after setup. Field report 2026-09-03: the founder had deleted the setup user's keys
+    // on advice and was left staring at a sentence about tokens. Say deleted key, say make one.
+    it("explains AWS's 'security token invalid' as a deleted key, with the way forward", async () => {
+      vi.stubGlobal(
+        "fetch",
+        operatorFetch(() =>
+          jsonResponse({ error: "aws_error", message: "The security token included in the request is invalid." }, 500),
+        ),
+      );
+      render(
+        <ConnectAwsView accounts={[linked]} onBack={() => {}} onChanged={() => {}} initialAction="redeploy" deployedSetupVersion={4} />,
+      );
+      await screen.findByText(/Update the protections in your AWS account/i);
+      await typeSetupKeyAndDeploy();
+      expect(await screen.findByText(/AWS does not know this access key ID/i)).toBeTruthy();
+      expect(screen.queryByText(/security token included in the request/i)).toBeNull();
+    });
+
     // From template version 2 the boundary already exists in the account, so "replace your
     // policy first" is wrong for these users (nothing was added to the policy after that): the
     // banner must lead with the key entry and describe the update as AWS ENFORCING the ceiling.
@@ -448,7 +467,11 @@ describe("ConnectAwsView", () => {
       );
       await screen.findByText(/Update the protections in your AWS account/i);
       expect(screen.getByText(/makes AWS\s+itself enforce a safeguard your account already has/i)).toBeTruthy();
-      expect(screen.getByText(/Enter the setup key you used last time/i)).toBeTruthy();
+      // The real procedure: the old setup key is usually (rightly) deleted by now, so make one
+      // for the update, use it once, delete it again — never "enter the key you used last time".
+      expect(screen.getByText(/Create a fresh access key for this update/i)).toBeTruthy();
+      expect(screen.getByText(/delete that key in IAM again/i)).toBeTruthy();
+      expect(screen.queryByText(/key you used last time/i)).toBeNull();
       expect(screen.queryByText(/replace that policy with the current\s+version/i)).toBeNull();
       // The policy swap survives as the fallback for the one case it applies to.
       expect(screen.getByText(/Only if AWS answers with a message naming/i)).toBeTruthy();
@@ -475,7 +498,8 @@ describe("ConnectAwsView", () => {
       expect(screen.getByText(/replace that policy with the current\s+version/i)).toBeTruthy();
       // where — the copy button and the console path
       expect(screen.getByRole("button", { name: /copy the policy/i })).toBeTruthy();
-      expect(screen.getByText(/IAM → Users → your setup user/i)).toBeTruthy();
+      // (the console path now also appears in the key step, for a setup user with no key left)
+      expect(screen.getAllByText(/IAM → Users → your setup user/i).length).toBeGreaterThan(0);
       // why — the new safeguard the permission exists for
       expect(screen.getAllByText(/AgentsPoppyBoundary/i).length).toBeGreaterThan(0);
       expect(screen.getByText(/caps any IAM role a connected app creates/i)).toBeTruthy();

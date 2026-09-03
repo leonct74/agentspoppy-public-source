@@ -129,10 +129,21 @@ export function ConnectAwsView({
    * who has just typed a different key. Say what happened and what to do instead.
    */
   const operatorDeniedError = !!deployError && /user\/AgentsPoppyOperator is not authorized/i.test(deployError);
+  /**
+   * AWS's "security token included in the request is invalid" (InvalidClientTokenId) means it
+   * does not know the access key ID at all — the key was deleted (usually on purpose, after
+   * setup). Nothing about tokens; say what it means and what to do.
+   */
+  const unknownKeyError =
+    !!deployError && /security token included in the request is invalid|InvalidClientTokenId/i.test(deployError);
   const deployErrorText = operatorDeniedError
     ? "AgentsPoppy ran this with the key it keeps (AgentsPoppyOperator), which by design cannot change the setup. " +
       "Enter your setup key above — your admin keys, or the IAM user carrying the AgentsPoppy access policy — and press Deploy setup again."
-    : deployError;
+    : unknownKeyError
+      ? "AWS does not know this access key ID — it was probably deleted after setup, which was the right thing to do. " +
+        "Create a new access key on your setup user (IAM → Users → your setup user → Security credentials → Create access key), " +
+        "enter it above with the session token left empty, and press Deploy setup again. Delete the key in IAM once the update is done."
+      : deployError;
 
   // "Reused your existing setup" note after a cross-region join (second computer).
   const [deployNote, setDeployNote] = useState<string | null>(null);
@@ -461,16 +472,27 @@ export function ConnectAwsView({
         </>
       ) : boundaryAlreadyExists ? (
         <>
-          <strong>Enter the setup key you used last time</strong> — your admin keys, or the IAM
-          user carrying the AgentsPoppy access policy — and press <strong>Deploy setup</strong>.
-          It is used once, held in memory, never written to disk, and the update takes a few
-          seconds. That key already carries every permission this update needs: nothing was
-          added to the access policy after the update that put the boundary in your account.
+          {/* Field lesson (2026-09-03): after setup, users are (rightly) told they can delete
+              the setup user's keys — so by the time an update comes the old key is gone, and
+              "enter the key you used last time" sent the founder to AWS's "security token is
+              invalid". Say the real procedure: make a key for the update, use it, delete it. */}
+          <strong>Create a fresh access key for this update</strong> on the IAM user you use for
+          setup (admin keys work too): in AWS, <strong>IAM → Users → your setup user → Security
+          credentials → Create access key</strong>, choose “Command Line Interface”. Enter it
+          below, leave the session token empty, and press <strong>Deploy setup</strong>. It is
+          used once, held in memory, never written to disk, and the update takes a few seconds.
+          When it reports done, <strong>delete that key in IAM again</strong> — nothing needs it
+          any more. That user’s copy of the AgentsPoppy access policy already carries every
+          permission this update needs: nothing was added to it after the update that put the
+          boundary in your account.
         </>
       ) : (
         <>
           Enter the key below and press <strong>Deploy setup</strong>. It is used once,
-          held in memory, never written to disk, and the update takes a few seconds.
+          held in memory, never written to disk, and the update takes a few seconds. If your
+          setup user no longer has a key, create one first (<strong>IAM → Users → your setup
+          user → Security credentials → Create access key</strong>) and delete it again when
+          the update is done.
         </>
       )}
     </li>
