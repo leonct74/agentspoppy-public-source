@@ -12,9 +12,14 @@
  * This is what makes the teardown promise real: we can always *find* the remainder
  * by tag and surface it, and certification asserts the post-teardown sweep is empty.
  *
- * Operator credentials (the admin/monitoring plane), like the CloudFormation provider.
+ * The host-maintenance session (the admin/monitoring plane), like the CloudFormation
+ * provider — NOT the raw operator key. Template v4 stripped that key to assume-only, so on
+ * a v4 account a sweep signed by it is refused in every region and the audit goes blind
+ * (found certifying AuditPoppy, 2026-09-10; this file had missed the v4 migration). The
+ * session carries `tag:GetResources` in MonitorAndTeardown (maintenance.ts) for exactly
+ * this call, and falls back to the operator key on a pre-v4 account.
  */
-import { operatorCredentials } from "./credentials";
+import { maintenanceCredentials } from "./maintenance";
 
 /** A live resource ARN returned by a tag query, in one region. */
 export interface TaggedResource {
@@ -44,14 +49,14 @@ export function resourceTypeFromArn(arn: string): string {
   return type ? `${service}:${type}` : service;
 }
 
-/** Default gateway backed by the AWS SDK. Operator credentials, lazy SDK import. */
+/** Default gateway backed by the AWS SDK. Maintenance-session credentials, lazy SDK import. */
 export function sdkTaggingGateway(): TaggingGateway {
   return {
     async getResourcesByTag(region, tagKey, tagValue) {
       const { ResourceGroupsTaggingAPIClient, GetResourcesCommand } = await import(
         "@aws-sdk/client-resource-groups-tagging-api"
       );
-      const client = new ResourceGroupsTaggingAPIClient({ region, credentials: await operatorCredentials() });
+      const client = new ResourceGroupsTaggingAPIClient({ region, credentials: await maintenanceCredentials() });
       const out: TaggedResource[] = [];
       let token: string | undefined;
       do {

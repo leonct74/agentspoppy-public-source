@@ -12,13 +12,15 @@
 //
 //   npm run certify -- --extension path/to/your/poppy --yes
 //   npm run certify -- --extension . --connection <connectionId> --yes --out my.cert.json
+//   npm run certify -- --extension . --yes --wait-for-index 30   # a slow tag index: wait up to 30 min
 //
 // This is the SAME harness the platform re-runs and signs at directory submission
 // (MARKETPLACE M7) — passing it locally is how you know you'll pass there.
 //
 // ⚠️  It performs a real teardown against the AWS account your operator credentials point
 //     at. Run it against the account where you deployed the poppy (ideally a throwaway dev
-//     account). It will NOT proceed without --yes. Exit code 0 = certified, 1 = failed.
+//     account). It will NOT proceed without --yes. Exit code 0 = certified, 1 = failed,
+//     2 = unverified (the sweep could not tell — run it again once the tag index is warm).
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
@@ -142,23 +144,49 @@ async function main(): Promise<void> {
     console.log(`Tearing down and verifying… (this can take 1–2 minutes)`);
     // Existence-verify each post-teardown tag hit so a tombstoned EC2 instance (still listed by
     // the Tagging API for ~1h after termination) isn't mistaken for a leftover and false-failed.
+    // --wait-for-index <minutes>: the Resource Groups Tagging index can lag by more than an hour
+    // on some accounts; the default warm-up is about two minutes. Longer lets the run become
+    // evidence instead of coming back unverified — waiting is honest, re-running blind is not.
+    const waitMinutes = flags["wait-for-index"] !== undefined ? Number(flags["wait-for-index"]) : undefined;
+    if (waitMinutes !== undefined && !(waitMinutes >= 0)) fail(`✗ --wait-for-index takes minutes, e.g. --wait-for-index 30`);
+    const warmUp =
+      waitMinutes !== undefined ? { attempts: Math.max(1, Math.ceil((waitMinutes * 60) / 20)), delayMs: 20_000 } : undefined;
     const report = await runCertification(
-      { service, registry, verifier: ec2AwareExistenceVerifier() },
+      {
+        service,
+        registry,
+        verifier: ec2AwareExistenceVerifier(),
+        ...(warmUp ? { warmUp } : {}),
+        onWarmUp: (i, n) => console.log(`  tag index has not caught up — waiting (${i}/${n}, 20 s each)…`),
+      },
       { connectionId: conn.id, manifest },
     );
 
     console.log();
     console.log(`  footprint before: ${report.footprintBefore.length} resource(s)`);
+    if (report.stacksStanding !== undefined) {
+      console.log(
+        `  stacks standing:  ${report.stacksStanding === null ? "could not be read (CloudFormation)" : `${report.stacksStanding.length} (CloudFormation)`}`,
+      );
+    }
     console.log(`  stacks deleted:   ${report.deletedStacks.length ? report.deletedStacks.join(", ") : "none"}`);
     console.log(`  teardown hook:    ${report.teardownHookRun ? "ran" : "not run"}`);
     console.log(`  residual sweep:   ${report.residualsAfter.length} resource(s) still tagged`);
     for (const w of report.warnings) console.log(`  ⚠️  ${w}`);
     console.log();
 
-    if (!report.passed) {
+    if (report.residualsAfter.length > 0) {
       for (const p of report.problems) console.error(`✗ ${p}`);
       for (const r of report.residualsAfter) console.error(`    • ${r.resourceType}  ${r.arn}  (${r.region})`);
       fail(``, `✗ NOT certified — ${report.residualsAfter.length} resource(s) remained. Fix per AGENTS.md §4, then re-run.`);
+    }
+    if (report.unverified.length > 0) {
+      // Neither green nor red: the sweep could not tell, so nothing was proven. No certificate,
+      // its own exit code, and the honest instruction — run it again once the index is warm.
+      for (const u of report.unverified) console.error(`? ${u}`);
+      console.error(``);
+      console.error(`? UNVERIFIED — no certificate: this run could not tell whether anything was left. Run certify again in a few minutes.`);
+      process.exit(2);
     }
 
     const cert = issueCertificate(report, { issuer: "self" });

@@ -43,6 +43,26 @@ fn broker_host_token(state: tauri::State<'_, HostToken>) -> String {
     state.0.lock().expect("host-token mutex poisoned").clone().unwrap_or_default()
 }
 
+/// Whether this install can update itself in place.
+///
+/// On Linux the updater swaps the running AppImage, and it finds that file through the
+/// APPIMAGE env var the AppImage runtime sets. A packaged install (the .deb, or
+/// agentspoppy-bin from the AUR) has no such var and lives in root-owned /usr/bin, so
+/// the swap could only fail — and there the package manager owns updates anyway
+/// (`yay -S agentspoppy-bin`, `apt upgrade`), exactly as the Microsoft Store does on
+/// Windows. Offering a banner that cannot work is worse than offering nothing.
+///
+/// Every other platform updates in place normally: macOS swaps the .app bundle, and
+/// Windows Store installs are kept out of the feed rather than gated here.
+#[tauri::command]
+fn self_update_supported() -> bool {
+    if cfg!(target_os = "linux") {
+        std::env::var_os("APPIMAGE").is_some()
+    } else {
+        true
+    }
+}
+
 /// AWS env vars worth forwarding to the broker. (A GUI app launched from Finder
 /// inherits no shell env, so the SDK falls back to the default profile +
 /// `~/.aws/config`; forwarding these helps when launched from a terminal.) The
@@ -254,7 +274,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(BrokerState::default())
         .manage(HostToken::default())
-        .invoke_handler(tauri::generate_handler![broker_host_token])
+        .invoke_handler(tauri::generate_handler![broker_host_token, self_update_supported])
         .setup(|app| {
             // macOS (Info.plist) and the Windows installers register the agentspoppy://
             // scheme at install time; Linux and dev builds must register at runtime.

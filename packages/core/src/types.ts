@@ -282,9 +282,11 @@ export interface CertificationSubject {
 
 /**
  * The outcome of one certification run: deploy → use → tear down → assert the
- * `agentspoppy:app` tag sweep is empty. `passed` is true iff `residualsAfter` is empty.
- * `warnings` never fail the run (e.g. "nothing was found before teardown"); `problems`
- * are the reasons it failed.
+ * `agentspoppy:app` tag sweep is empty. `passed` is true iff `residualsAfter` is empty AND
+ * the sweep could tell (`unverified` is empty). `warnings` never fail the run (e.g. "nothing
+ * was found before teardown"); `problems` are the reasons it failed; `unverified` are the
+ * reasons the run is not evidence either way — a sweep that saw nothing while a stack stood,
+ * or one that could not be read — and a certificate is never issued on them (2026-09-10).
  */
 export interface CertificationReport {
   subject: CertificationSubject;
@@ -300,12 +302,25 @@ export interface CertificationReport {
   residualsAfter: ResidualResource[];
   /** Whether the poppy's declared teardown hook was invoked. */
   teardownHookRun: boolean;
-  /** True iff `residualsAfter` is empty — the leaves-no-trace property held. */
+  /** True iff `residualsAfter` is empty AND `unverified` is empty — the leaves-no-trace property held, and was testable. */
   passed: boolean;
   /** Why it failed (empty when passed). */
   problems: string[];
   /** Non-fatal advisories (e.g. an empty footprint means the run exercised little). */
   warnings: string[];
+  /**
+   * Why this run could not tell (empty when it could): the tag sweep answered "nothing" before
+   * teardown while CloudFormation said stacks stood (the index had not caught up), or the sweep
+   * after teardown could not be read. A "0 residual" from such a sweep is not evidence, so the
+   * run neither passes nor fails — it must be repeated once the index is warm.
+   */
+  unverified: string[];
+  /**
+   * What CloudFormation said stood before teardown — asked only when the tag sweep saw
+   * nothing, so a reader sees both systems side by side. `null` = the question could not be
+   * answered (which is itself grounds for `unverified`); absent = not asked.
+   */
+  stacksStanding?: string[] | null;
   /** When the run completed (ISO 8601). */
   ranAt: string;
 }

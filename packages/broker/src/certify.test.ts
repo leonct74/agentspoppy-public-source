@@ -53,17 +53,47 @@ const residual = (arn: string, resourceType: string): ResidualResource => ({ arn
 /** A configurable CloudProvider: residuals differ before vs after the (one) teardown. */
 class FakeCloud implements CloudProvider {
   toreDown = false;
+  sweepsBefore = 0;
   constructor(
-    private readonly opts: { stacks?: StackInventory[]; before?: ResidualResource[]; after?: ResidualResource[] } = {},
+    private readonly opts: {
+      stacks?: StackInventory[];
+      before?: ResidualResource[];
+      /** Successive answers of the sweep BEFORE teardown (a lagging index warming up); the last one repeats. */
+      beforeSequence?: ResidualResource[][];
+      after?: ResidualResource[];
+      /** The sweep after teardown throws — an account that cannot be read. */
+      afterUnreadable?: boolean;
+      /** Successive answers of listStacks in call order (the last repeats) — so the inventory read can say one thing and the teardown another. */
+      listStacksSequence?: StackInventory[][];
+      /** The FIRST listStacks call throws — an inventory read that could not be answered. */
+      listStacksFailsFirst?: boolean;
+    } = {},
   ) {}
+  listStacksCalls = 0;
   async listStacks(): Promise<StackInventory[]> {
-    return this.toreDown ? [] : (this.opts.stacks ?? []);
+    const n = this.listStacksCalls++;
+    if (this.opts.listStacksFailsFirst && n === 0) throw new Error("AccessDenied: cloudformation:DescribeStacks");
+    if (this.toreDown) return [];
+    const seq = this.opts.listStacksSequence;
+    if (seq && seq.length > 0) return seq[Math.min(n, seq.length - 1)] ?? [];
+    return this.opts.stacks ?? [];
   }
   async deleteStack(): Promise<void> {
     this.toreDown = true;
   }
   async findResiduals(): Promise<ResidualResource[]> {
-    return this.toreDown ? (this.opts.after ?? []) : (this.opts.before ?? []);
+    if (this.toreDown) {
+      if (this.opts.afterUnreadable) throw new Error("AccessDenied: tag:GetResources");
+      return this.opts.after ?? [];
+    }
+    const seq = this.opts.beforeSequence;
+    if (seq && seq.length > 0) {
+      const answer = seq[Math.min(this.sweepsBefore, seq.length - 1)] ?? [];
+      this.sweepsBefore++;
+      return answer;
+    }
+    this.sweepsBefore++;
+    return this.opts.before ?? [];
   }
   async buildInfraGraph(connection: Connection): Promise<InfraGraph> {
     return { connectionId: connection.id, appId: connection.app.id, nodes: [], edges: [], generatedAt: "t" };
@@ -170,7 +200,7 @@ describe("runCertification", () => {
   });
 
   it("with a verifier, a CONFIRMED-present residual still fails", async () => {
-    const cloud = new FakeCloud({ stacks: [stack("S")], after: [residual("arn:aws:route53:::hostedzone/Z1", "route53:hostedzone")] });
+    const cloud = new FakeCloud({ stacks: [stack("S")], before: [residual("arn:aws:s3:::b", "s3")], after: [residual("arn:aws:route53:::hostedzone/Z1", "route53:hostedzone")] });
     const { s, connId } = await deployed(cloud);
     const report = await runCertification({ service: s, verifier: { verify: async () => "present" as const } }, { connectionId: connId, manifest: manifest() });
     expect(report.passed).toBe(false);
@@ -179,7 +209,7 @@ describe("runCertification", () => {
   });
 
   it("with a verifier, an UNVERIFIABLE residual warns but does not fail", async () => {
-    const cloud = new FakeCloud({ stacks: [stack("S")], after: [residual("arn:aws:s3:::b", "s3")] });
+    const cloud = new FakeCloud({ stacks: [stack("S")], before: [residual("arn:aws:s3:::b", "s3")], after: [residual("arn:aws:s3:::b", "s3")] });
     const { s, connId } = await deployed(cloud);
     const report = await runCertification({ service: s, verifier: { verify: async () => "unverified" as const } }, { connectionId: connId, manifest: manifest() });
     expect(report.passed).toBe(true);
@@ -193,7 +223,121 @@ describe("runCertification", () => {
 
     expect(report.passed).toBe(true);
     expect(report.problems).toEqual([]);
+    expect(report.unverified).toEqual([]);
     expect(report.warnings.join("\n")).toMatch(/Nothing tagged with your app id was found before teardown/);
+  });
+
+  // The blind sweep, 2026-09-10: AuditPoppy certified with "footprint before: 0" while a live,
+  // fully tagged stack stood — the Tagging API had not caught up, and the same sweep then said
+  // "0 residual". Zero from a sweep that cannot see a standing stack is not evidence.
+  it("is UNVERIFIED — not a pass — when the sweep saw nothing while a stack stood", async () => {
+    const cloud = new FakeCloud({ stacks: [stack("AuditPoppyStack")], before: [], after: [] });
+    const { s, connId } = await deployed(cloud);
+    const waits: number[] = [];
+    const report = await runCertification(
+      { service: s, warmUp: { attempts: 3, delayMs: 20_000 }, sleep: async (ms) => void waits.push(ms) },
+      { connectionId: connId, manifest: manifest() },
+    );
+
+    expect(report.deletedStacks).toEqual(["AuditPoppyStack"]);
+    expect(report.residualsAfter).toEqual([]);
+    expect(report.passed).toBe(false);
+    expect(report.problems).toEqual([]); // not the poppy's fault — and not proof either
+    expect(report.unverified.join("\n")).toMatch(/saw nothing before teardown while 1 stack\(s\) stood \(AuditPoppyStack\)/);
+    expect(waits).toEqual([20_000, 20_000, 20_000]); // it waited for the index, three times
+    expect(cloud.sweepsBefore).toBe(4); // the first sweep plus one after every wait
+    expect(() => issueCertificate(report)).toThrow(/unverified/);
+  });
+
+  it("waits for a lagging index: re-sweeps until it sees the stack, then verifies normally", async () => {
+    const cloud = new FakeCloud({
+      stacks: [stack("AuditPoppyStack")],
+      beforeSequence: [[], [], [residual("arn:aws:s3:::audit-snapshots", "s3")]],
+      after: [],
+    });
+    const { s, connId } = await deployed(cloud);
+    const report = await runCertification(
+      { service: s, warmUp: { attempts: 6, delayMs: 1 }, sleep: async () => {} },
+      { connectionId: connId, manifest: manifest() },
+    );
+
+    expect(report.footprintBefore).toHaveLength(1);
+    expect(report.unverified).toEqual([]);
+    expect(report.passed).toBe(true);
+    expect(cloud.sweepsBefore).toBe(3); // stopped re-sweeping as soon as the index answered
+  });
+
+  it("does not wait when nothing stands — an empty account is the no-op warning, not a blind sweep", async () => {
+    const cloud = new FakeCloud({ stacks: [], before: [], after: [] });
+    const { s, connId } = await deployed(cloud);
+    const waits: number[] = [];
+    const report = await runCertification(
+      { service: s, sleep: async (ms) => void waits.push(ms) },
+      { connectionId: connId, manifest: manifest() },
+    );
+    expect(waits).toEqual([]);
+    expect(report.unverified).toEqual([]);
+    expect(report.passed).toBe(true);
+  });
+
+  // 2026-09-11: three AuditPoppy runs certified through the guard above — the CloudFormation
+  // read failed, was caught into "nothing stands", the warm-up was skipped, and the blind sweep
+  // certified. The read's failure is itself grounds for unverified: fail CLOSED.
+  it("FAILS CLOSED: an inventory read that cannot be answered is UNVERIFIED, not 'nothing stands'", async () => {
+    const cloud = new FakeCloud({ stacks: [stack("AuditPoppyStack")], before: [], after: [], listStacksFailsFirst: true });
+    const { s, connId } = await deployed(cloud);
+    const waits: number[] = [];
+    const report = await runCertification(
+      { service: s, sleep: async (ms) => void waits.push(ms) },
+      { connectionId: connId, manifest: manifest() },
+    );
+
+    expect(report.stacksStanding).toBeNull();
+    expect(waits).toEqual([]); // nothing to wait for: the question itself failed
+    expect(report.deletedStacks).toEqual(["AuditPoppyStack"]); // teardown still ran — and deleted the stack the read could not see
+    expect(report.passed).toBe(false);
+    expect(report.unverified.join("\n")).toMatch(/Could not read what stands from CloudFormation \(AccessDenied/);
+    expect(() => issueCertificate(report)).toThrow(/unverified/);
+  });
+
+  it("is UNVERIFIED by FIRST-HAND proof when the sweep saw nothing but teardown deleted a stack — whatever the inventory said", async () => {
+    // The inventory answers "nothing stands" (wrongly); the teardown then deletes a stack. The
+    // harness's own deletion is proof something stood, so the before-sweep was blind.
+    const cloud = new FakeCloud({ before: [], after: [], listStacksSequence: [[], [stack("AuditPoppyStack")]] });
+    const { s, connId } = await deployed(cloud);
+    const report = await runCertification({ service: s }, { connectionId: connId, manifest: manifest() });
+
+    expect(report.stacksStanding).toEqual([]);
+    expect(report.deletedStacks).toEqual(["AuditPoppyStack"]);
+    expect(report.residualsAfter).toEqual([]);
+    expect(report.passed).toBe(false);
+    expect(report.unverified.join("\n")).toMatch(/yet teardown deleted 1 stack\(s\) \(AuditPoppyStack\) — first-hand proof/);
+    expect(() => issueCertificate(report)).toThrow(/unverified/);
+  });
+
+  it("reports the warm-up's progress and honours a longer wait", async () => {
+    const cloud = new FakeCloud({ stacks: [stack("S")], before: [], after: [] });
+    const { s, connId } = await deployed(cloud);
+    const progress: string[] = [];
+    const report = await runCertification(
+      { service: s, warmUp: { attempts: 4, delayMs: 20_000 }, sleep: async () => {}, onWarmUp: (i, n) => void progress.push(`${i}/${n}`) },
+      { connectionId: connId, manifest: manifest() },
+    );
+    expect(progress).toEqual(["1/4", "2/4", "3/4", "4/4"]);
+    expect(report.stacksStanding).toEqual(["S"]);
+    expect(report.passed).toBe(false); // still blind after the wait: unverified, and only once
+    expect(report.unverified).toHaveLength(1);
+  });
+
+  it("is UNVERIFIED when the sweep after teardown could not be read", async () => {
+    const cloud = new FakeCloud({ stacks: [stack("S")], before: [residual("arn:aws:s3:::b", "s3")], afterUnreadable: true });
+    const { s, connId } = await deployed(cloud);
+    const report = await runCertification({ service: s }, { connectionId: connId, manifest: manifest() });
+
+    expect(report.residualsAfter).toEqual([]);
+    expect(report.passed).toBe(false);
+    expect(report.unverified.join("\n")).toMatch(/sweep after teardown could not be read/);
+    expect(() => issueCertificate(report)).toThrow(/unverified/);
   });
 
   it("runs the declared teardown hook when a registry is supplied", async () => {
@@ -208,7 +352,7 @@ describe("runCertification", () => {
   });
 
   it("does not flag a hook for a manifest without one", async () => {
-    const cloud = new FakeCloud({ stacks: [stack("S")], before: [], after: [] });
+    const cloud = new FakeCloud({ stacks: [stack("S")], before: [residual("arn:aws:s3:::b", "s3")], after: [] });
     const { s, connId } = await deployed(cloud);
     const runTeardownHook = vi.fn(async () => {});
     const report = await runCertification(
@@ -242,6 +386,7 @@ describe("issueCertificate", () => {
     passed: true,
     problems: [],
     warnings: [],
+    unverified: [],
     ranAt: "2026-06-27T00:00:00.000Z",
   });
 

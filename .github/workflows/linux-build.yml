@@ -94,11 +94,134 @@ jobs:
       - name: Build frontend
         run: npm run build -w @agentspoppy/app
 
+      # Tauri's AppImage bundler does not use the distro's linuxdeploy: it downloads one
+      # that Tauri mirrors itself, and that mirrored asset was uploaded 2024-07-29.
+      # linuxdeploy compiles the AppImage excludelist INTO the binary at build time
+      # (src/core/generate-excludelist.sh -> excludelist.h), and libwayland-client.so.0
+      # only landed on that list 2024-11-03, in AppImageCommunity/pkg2appimage#559 —
+      # three months after Tauri's pin was cut. So the pinned tool has never heard of the
+      # exclusion and bundles Ubuntu 22.04's libwayland-{client,cursor,egl,server}.
+      #
+      # AppRun.wrapped (stock AppImageKit) then hard-codes the AppDir's lib dirs ahead of
+      # the system ones in LD_LIBRARY_PATH, so on any host with wayland >= 1.24 the HOST's
+      # libEGL_mesa.so.0 resolves against our stale copy, fails on the missing
+      # wl_fixes_interface, and glvnd ends up with no EGL vendor at all: WebKitWebProcess
+      # aborts with "Could not create default EGL display: EGL_BAD_PARAMETER" ~300ms into
+      # startup. The main process survives, so the user gets a blank window and reads it as
+      # a hang rather than a crash — which is why this went unreported for so long.
+      # Field report: 0.3.18 on Arch/Omarchy, wayland 1.26 + mesa 26.2, 2026-09-04,
+      # reproduced 6/6. Removing the four files on that host fixed it outright: Mesa's
+      # libEGL_mesa + libgallium then map correctly and the app stays up.
+      #
+      # Two ways to fix it. Seeding a NEWER linuxdeploy would drop libwayland-client via
+      # the current excludelist, but it means a two-year version jump in the bundler and
+      # still leaves cursor/egl/server behind (they are not on the excludelist). Removing
+      # the files ourselves keeps Tauri's pinned toolchain byte-for-byte and matches the
+      # state actually verified on the affected hardware, so that is what we do.
+      #
+      # TRADEOFF, deliberate: dropping bundled libraries widens what we need from the
+      # host, and the requirement is "host provides the wayland client libraries" — all
+      # three of client, cursor and egl, not just client. The bundled libgdk-3 and
+      # libgstgl need wl_cursor_theme_* / wl_cursor_image_get_buffer from libwayland-cursor
+      # and wl_egl_window_create/_destroy/_resize from libwayland-egl. In practice the
+      # wayland package ships all three together, so this is not a new axis of risk.
+      #
+      # The floor is wayland >= 1.20. libwayland-client carries no symbol versioning
+      # (no version definition sections at all), so nothing protects the boundary, and
+      # wl_proxy_marshal_flags — first exported in 1.20.0, per Debian's own
+      # libwayland-client0.symbols — is an undefined symbol in SIX bundled objects:
+      # libgdk-3, libwebkit2gtk-4.1, libgstgl-1.0, libwayland-cursor, im-wayland.so and
+      # im-waylandgtk.so. So the floor applies across the whole GTK/WebKit surface; there
+      # is no reading where only unused bits need it. A host below 1.20 (20.04 and
+      # bullseye ship 1.18) would fail to load libgdk-3 at all — on X11 too, since
+      # DT_NEEDED is resolved regardless of GDK_BACKEND.
+      #
+      # That is the same call upstream made in pkg2appimage#559: it trades a
+      # broken-on-every-modern-host bug for a raised floor on hosts already past end of
+      # standard support. Verified on wayland 1.26 (every undefined wayland symbol across
+      # all six dependents resolves against the host). NOT verified downward — we have no
+      # pre-1.20 host. Do not describe that direction as tested.
+      #
+      # prepare_tools() only downloads what is missing, so seeding this wrapper claims the
+      # gtk plugin slot without forking the plugin itself. Deleting from the plugin is
+      # final: linuxdeploy deploys no further libraries once input plugins have run — only
+      # icons and desktop files, then the output plugin packs (linuxdeploy src/main.cpp).
+      - name: Drop bundled libwayland (breaks host Mesa EGL on wayland >= 1.24)
+        run: |
+          set -euo pipefail
+          TOOLS="${XDG_CACHE_HOME:-$HOME/.cache}/tauri"
+          mkdir -p "$TOOLS"
+          # Tauri's own plugin, from the URL prepare_tools() would have used — fetched
+          # rather than vendored so it keeps tracking upstream. The name deliberately
+          # does not match linuxdeploy-plugin-*.sh, so it is not itself discoverable.
+          curl -fsSL --retry 3 -o "$TOOLS/gtk-plugin-upstream.sh" \
+            https://raw.githubusercontent.com/tauri-apps/linuxdeploy-plugin-gtk/master/linuxdeploy-plugin-gtk.sh
+          chmod +x "$TOOLS/gtk-plugin-upstream.sh"
+          cat > "$TOOLS/linuxdeploy-plugin-gtk.sh" <<'WRAPPER'
+          #!/usr/bin/env bash
+          set -e
+          here="$(dirname "$(readlink -f "$0")")"
+          "$here/gtk-plugin-upstream.sh" "$@"
+          appdir=""
+          while [ $# -gt 0 ]; do
+            case "$1" in
+              --appdir=*) appdir="${1#--appdir=}" ;;
+              --appdir) appdir="${2:-}"; shift ;;
+            esac
+            shift
+          done
+          # No --appdir: linuxdeploy is only querying the plugin API version.
+          if [ -n "$appdir" ] && [ -d "$appdir" ]; then
+            find "$appdir" -name 'libwayland-*' -print -delete
+          fi
+          WRAPPER
+          chmod +x "$TOOLS/linuxdeploy-plugin-gtk.sh"
+
+      # The deb is not a Debian/Ubuntu channel decision — it is the SOURCE for the AUR
+      # package (Tauri's own AUR guidance packages the deb, not the AppImage). It costs
+      # nothing: the AppImage bundler already builds an appimage_deb tree on the way, so
+      # asking for both is one extra bundle target on the same run.
+      #
+      # It also sidesteps this file's whole libwayland problem by construction: a deb
+      # bundles no libraries at all, it declares webkit2gtk-4.1/gtk3/glib2 as system
+      # dependencies, so a packaged install uses the host's graphics stack and cannot
+      # shadow it. That is why the guard above only inspects the AppImage.
       - name: Tauri build (AppImage + signed updater artifact)
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
-        run: npm run tauri -w @agentspoppy/app -- build --bundles appimage
+        run: npm run tauri -w @agentspoppy/app -- build --bundles appimage,deb
+
+      # The assertion that matters. Everything above is a means to this end, and if a
+      # future linuxdeploy/Tauri change reintroduces the bundled wayland we want a red
+      # build, not another silent blank-window release in the field.
+      - name: Guard — the AppImage must not bundle libwayland
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          BUILT=(app/src-tauri/target/release/bundle/appimage/*.AppImage)
+          if [ ${#BUILT[@]} -ne 1 ]; then
+            echo "::error::expected exactly one AppImage, found ${#BUILT[@]}"
+            exit 1
+          fi
+          APPIMAGE="${BUILT[0]}"
+          WORK=$(mktemp -d)
+          cp "$APPIMAGE" "$WORK/app.AppImage"
+          chmod +x "$WORK/app.AppImage"
+          ( cd "$WORK" && ./app.AppImage --appimage-extract > /dev/null )
+          FOUND=$(find "$WORK/squashfs-root" -name 'libwayland-*' -printf '%P\n')
+          if [ -n "$FOUND" ]; then
+            echo "::error::AppImage bundles libwayland; this breaks host Mesa EGL on wayland >= 1.24 hosts"
+            echo "$FOUND"
+            exit 1
+          fi
+          echo "no libwayland in the bundle"
+          # Not fatal, but the same shadowing failure mode applies to anything else the
+          # host graphics stack links against, so surface it while we are already looking.
+          find "$WORK/squashfs-root" \
+            \( -name 'libEGL*' -o -name 'libGL*' -o -name 'libgbm*' -o -name 'libdrm*' -o -name 'libglapi*' \) \
+            -printf 'note: also bundled: %P\n'
+          rm -rf "$WORK"
 
       # A rolling DRAFT release in this (private) repo, not an Actions artifact: the
       # 114 MB AppImage alone dominated the account-wide 500 MB artifact ceiling, and
@@ -117,4 +240,5 @@ jobs:
             --title "CI transport: linux run ${{ github.run_id }}" \
             --notes "linux-x64 AppImage build of ${{ github.sha }}. Pure transport, not a release." \
             app/src-tauri/target/release/bundle/appimage/*.AppImage \
-            app/src-tauri/target/release/bundle/appimage/*.sig
+            app/src-tauri/target/release/bundle/appimage/*.sig \
+            app/src-tauri/target/release/bundle/deb/*.deb

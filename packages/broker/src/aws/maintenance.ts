@@ -24,6 +24,7 @@
  */
 import { HOST_SESSION_PREFIX } from "@agentspoppy/core";
 import { operatorCredentials } from "./credentials";
+import { APP_TAG_KEY } from "./policy";
 import {
   isPackedPolicyError,
   policyDocumentsMatch,
@@ -47,6 +48,13 @@ export const MAINTENANCE_SESSION_NAME = `${HOST_SESSION_PREFIX}maintenance`;
  * means orphaned, billable resources. The real safety control is in code: the
  * engine only targets resources the tag sweep attributed to a poppy, and re-reads
  * the live tag immediately before every deletion.
+ *
+ * This statement also carries the STACK teardown: `cloudformation:DeleteStack` above runs
+ * on THIS session's credentials, so for every resource type a poppy stack may contain the
+ * host needs whatever CloudFormation calls while deleting that type — which is not always
+ * a `Delete*` name. `events:RemoveTargets` (AWS::Events::Rule) and `lambda:RemovePermission`
+ * (AWS::Lambda::Permission) are both here for that reason and for no other; a least-privilege
+ * pass that reads them as unused will break teardown. maintenance.test.ts pins the rule.
  */
 export const MAINTENANCE_POLICY_STATEMENTS = [
   {
@@ -73,15 +81,33 @@ export const MAINTENANCE_POLICY_STATEMENTS = [
       "s3:DeleteObject",
       "s3:DeleteObjectVersion",
       "s3:DeleteBucket",
+      // A bucket POLICY is its own CloudFormation resource, and DeleteBucket is a different
+      // action that does not cover it. Any poppy whose bucket carries a policy — which is every
+      // poppy that lets an AWS service write into it, e.g. an AWS Config delivery channel —
+      // strands its stack without this.
+      "s3:DeleteBucketPolicy",
       "dynamodb:ListTagsOfResource",
       "dynamodb:UpdateTable",
       "dynamodb:DeleteTable",
+      // DeleteTable is asynchronous: CloudFormation issues it, then POLLS DescribeTable until
+      // the table is gone. Without the poll it cannot observe the delete finishing, so the
+      // resource fails even though the delete itself was authorised.
+      "dynamodb:DescribeTable",
       "cognito-idp:ListTagsForResource",
       "cognito-idp:DescribeUserPool",
       "cognito-idp:DeleteUserPoolDomain",
       "cognito-idp:DeleteUserPool",
       "lambda:ListTags",
       "lambda:DeleteFunction",
+      // Deleting an AWS::Lambda::Permission — the resource-based grant that lets EventBridge
+      // invoke a scheduled function — is a lambda:RemovePermission call, NOT DeleteFunction.
+      // Without it CloudFormation strands the whole stack in DELETE_FAILED. Keep it.
+      "lambda:RemovePermission",
+      // IAM is NOT here — it is the one deliberate exception, in HostRoleTeardown below, tagged.
+      // Both reasons this statement is unconditioned fail for IAM: every action it needs
+      // reliably supports aws:ResourceTag on the role, and an orphaned role costs nothing, so
+      // the "a condition that silently fails to authorize leaves billable leftovers" argument
+      // does not apply. It is also the only place this session gets a MUTATING IAM power.
       "logs:ListTagsForResource",
       "logs:DeleteLogGroup",
       "ses:DeleteIdentity",
@@ -95,6 +121,70 @@ export const MAINTENANCE_POLICY_STATEMENTS = [
       "events:DeleteRule",
     ],
     Resource: "*",
+  },
+  {
+    // HostRoleTeardown: the delete-time IAM sequence, and the ONLY mutating IAM power this
+    // session has. A poppy that deploys any compute deploys an execution role with it, so this
+    // is close to every stack in the directory — and deleting AWS::IAM::Role is a sequence, not
+    // one call: CloudFormation enumerates the inline policies and deletes each, detaches any
+    // managed ones, deletes the role, then reads it back. Missing any step strands the stack.
+    //
+    // Tagged, unlike HostResidualCleanup above, because I2 — the host acts on what carries the
+    // poppy's tag — should hold wherever it CAN, and here it can: all seven actions support
+    // aws:ResourceTag on the role, and nothing billable is orphaned if the condition ever fails
+    // to authorize. Any poppy's value, not one app's: this session serves every poppy, so the
+    // test is that the tag is PRESENT.
+    //
+    // The precondition is already true: a poppy's stack is born tagged under the compiler's
+    // aws:RequestTag rule and CloudFormation propagates stack tags to AWS::IAM::Role, which is
+    // why the certify sweep already counts roles as the poppy's footprint. A role WITHOUT the
+    // tag strands the stack under this design, and that is the right failure — the tag sweep
+    // would not have seen it either, so silently deleting it would be acting outside the
+    // mechanism rather than inside it.
+    Sid: "HostRoleTeardown",
+    Effect: "Allow",
+    // The MUTATING three only. The reads are next, deliberately unconditioned — see there.
+    Action: ["iam:DeleteRolePolicy", "iam:DetachRolePolicy", "iam:DeleteRole"],
+    Resource: "arn:aws:iam::*:role/*",
+    // Null "false" = the key IS present. The mirror of policy.ts's `Null: "true"` for untagged.
+    Condition: { Null: { [`aws:ResourceTag/${APP_TAG_KEY}`]: "false" } },
+  },
+  {
+    // The reads, UNCONDITIONED — and the reason is subtle enough to be worth the statement.
+    //
+    // `Null: "false"` requires the tag key to be present in the REQUEST CONTEXT, which needs a
+    // resource to read it from. CloudFormation's role handler reads the role back after
+    // DeleteRole to confirm it is gone — and at that moment there is no role, so no tag context,
+    // so a tagged condition cannot match. The read-back would return AccessDenied instead of
+    // NoSuchEntity, and AccessDenied is a failure to CloudFormation where NoSuchEntity is
+    // success. The stack strands on the last step of its own successful deletion.
+    //
+    // A read cannot widen anything, so the fence buys nothing here and costs the teardown. Still
+    // scoped to role ARNs: this session has no business reading anything else in IAM.
+    Sid: "HostRoleTeardownReads",
+    Effect: "Allow",
+    Action: ["iam:GetRole", "iam:GetRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies"],
+    Resource: "arn:aws:iam::*:role/*",
+  },
+  {
+    // The policy half of DetachRolePolicy, deliberately UNCONDITIONED.
+    //
+    // The managed policy on an execution role is normally an AWS-managed one
+    // (arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole and friends), which
+    // carries no agentspoppy:app tag and never will. If the tagged statement above were the only
+    // grant and the policy counts as a resource of this call, the condition denies the WHOLE
+    // call and strands the stack on the most common shape there is — the delete-time form of the
+    // trap policy.ts documents, where one blanket condition denies a call that touches two
+    // resources.
+    //
+    // Load-bearing, not belt-and-braces: IAM's reference lists `policy*` AND `role*` as required
+    // resource types for DetachRolePolicy (both starred), so the call genuinely touches two
+    // resources and needs a grant for each. It cannot widen anything on its own — detaching
+    // still requires the role side, which the tagged statement above gates.
+    Sid: "HostRoleTeardownDetachTarget",
+    Effect: "Allow",
+    Action: ["iam:DetachRolePolicy"],
+    Resource: ["arn:aws:iam::aws:policy/*", "arn:aws:iam::*:policy/*"],
   },
 ] as const;
 

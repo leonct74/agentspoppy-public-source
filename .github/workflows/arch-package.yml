@@ -1,0 +1,99 @@
+# Build the Arch package (.pkg.tar.zst) from an ALREADY-PUBLISHED release, and attach it
+# to that release. Omarchy and Arch users then install with one command:
+#
+#     sudo pacman -U https://github.com/leonct74/agentspoppy-releases/releases/download/vX.Y.Z/agentspoppy-bin-X.Y.Z-1-x86_64.pkg.tar.zst
+#
+# Why this exists rather than only the AUR: AUR account registration was suspended when
+# this shipped (2026-09-04), and it needs a human account we cannot create. This produces
+# the SAME package from the SAME PKGBUILD, so publishing to the AUR later changes nothing
+# for users who installed this way — pacman sees the same pkgname/pkgver.
+#
+# It runs AFTER the release exists because the PKGBUILD's source is the published .deb.
+# That ordering is deliberate: the package is built from exactly the bytes users can
+# download and verify, not from a private CI artifact that merely resembles them.
+name: arch-package
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Published version to package, without the v (e.g. 0.3.19)"
+        required: true
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tooling
+        run: pacman -Syu --noconfirm --needed git github-cli
+
+      - name: Build the package
+        run: |
+          set -euo pipefail
+          V="${{ inputs.version }}"
+          DEB="AgentsPoppy_${V}_amd64.deb"
+          URL="https://github.com/leonct74/agentspoppy-releases/releases/download/v${V}/${DEB}"
+
+          # makepkg refuses to run as root, and the checkout is root-owned.
+          useradd -m builder
+          cp -r packaging/arch /home/builder/pkg
+          chown -R builder:builder /home/builder/pkg
+
+          # Point the PKGBUILD at this version and re-hash the PUBLISHED deb — the same
+          # bytes a user would download, so the package cannot be built from anything else.
+          curl -fsSL --retry 3 -o /tmp/"$DEB" "$URL"
+          SHA=$(sha256sum /tmp/"$DEB" | cut -d' ' -f1)
+          echo "published deb sha256: $SHA"
+          sed -i "s/^pkgver=.*/pkgver=${V}/" /home/builder/pkg/PKGBUILD
+          sed -i "0,/'[0-9a-f]\{64\}'/s//'${SHA}'/" /home/builder/pkg/PKGBUILD
+
+          # --nodeps: this repacks a deb, so the runtime deps (webkit2gtk et al) are not
+          # needed to BUILD it, only to run it. They stay declared in the package.
+          sudo -u builder bash -lc 'cd /home/builder/pkg && makepkg --nodeps --noconfirm'
+
+          # Keep .SRCINFO honest for the eventual AUR push.
+          sudo -u builder bash -lc 'cd /home/builder/pkg && makepkg --printsrcinfo > .SRCINFO'
+
+          cp /home/builder/pkg/*.pkg.tar.zst .
+          ls -la ./*.pkg.tar.zst
+
+      - name: Verify the built package
+        run: |
+          set -euo pipefail
+          PKG=$(ls ./*.pkg.tar.zst)
+          echo "== contents =="
+          bsdtar -tf "$PKG" | grep -vE '^\.' | sed 's/^/  /'
+          echo "== the desktop entry must carry a Categories value =="
+          bsdtar -xOf "$PKG" usr/share/applications/AgentsPoppy.desktop | sed 's/^/  /'
+          bsdtar -xOf "$PKG" usr/share/applications/AgentsPoppy.desktop | grep -q '^Categories=.\+' \
+            || { echo "::error::desktop entry has no Categories — it would be filed under no menu"; exit 1; }
+          echo "== a package must never bundle libraries; that was the 0.3.18 bug =="
+          if bsdtar -tf "$PKG" | grep -E 'lib.*\.so'; then
+            echo "::error::the package bundles shared libraries"; exit 1
+          fi
+          echo "  none — links against system libraries, as intended"
+
+      # Same transport pattern as linux-build.yml: a draft release in THIS (private) repo,
+      # because the default token cannot write to the public releases repo and there is no
+      # cross-repo secret. The publish step stays a deliberate human action, as the runbook
+      # wants — collect it with `gh release download ci-arch-package` and upload it to the
+      # public vX.Y.Z release.
+      - name: Upload to the ci-arch-package draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="ci-arch-package"
+          # --repo is required: inside the container the checkout is not recognised as a
+          # git repo, so gh has no remote to infer from ("fatal: not a git repository").
+          R="${{ github.repository }}"
+          gh release delete "$TAG" --repo "$R" --yes 2>/dev/null || true
+          gh release create "$TAG" --repo "$R" --draft \
+            --title "CI transport: arch package ${{ inputs.version }}" \
+            --notes "agentspoppy-bin for ${{ inputs.version }}, built from the published deb. Pure transport, not a release." \
+            ./*.pkg.tar.zst

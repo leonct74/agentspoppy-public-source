@@ -14,8 +14,8 @@
  *
  * This engine closes that hole from the host side: the generic tag sweep already finds
  * every surviving resource stamped `agentspoppy:app = <app id>` (see ./tagging.ts); here
- * the HOST deletes them itself, with type-aware deleters, on the operator's own
- * credentials — no poppy code involved. The poppy's hook still runs first when it can
+ * the HOST deletes them itself, with type-aware deleters, on its own maintenance session
+ * (maintenance.ts; the raw operator key before template v4) — no poppy code involved. The poppy's hook still runs first when it can
  * (only the poppy knows its un-tagged/un-taggable leftovers, e.g. Route53 records); the
  * engine is the guarantee that whatever is *attributed* to the poppy never outlives it.
  *
@@ -32,11 +32,11 @@
  *
  * Same seams as the rest of the admin plane: a {@link DeletionGateway} interface so the
  * dispatch/safety logic is unit-tested without AWS, an SDK factory with lazy imports and
- * per-call operator credentials, and best-effort per-resource error capture (one
+ * per-call maintenance-session credentials, and best-effort per-resource error capture (one
  * undeletable resource must not strand the rest).
  */
 import type { ResidualResource } from "@agentspoppy/core";
-import { operatorCredentials } from "./credentials";
+import { maintenanceCredentials } from "./maintenance";
 import { APP_TAG_KEY } from "./policy";
 import { isAwsAuthError } from "./errors";
 import { resourceTypeFromArn } from "./tagging";
@@ -183,11 +183,19 @@ function isNotFound(err: unknown): boolean {
  *  (e.g. a live writer refilling the bucket faster than we drain it). */
 const MAX_DRAIN_PASSES = 5000;
 
-/** Default gateway backed by the AWS SDK. Operator credentials, lazy SDK import. */
+/**
+ * Default gateway backed by the AWS SDK. Maintenance-session credentials, lazy SDK import.
+ *
+ * NOT the raw operator key: template v4 stripped it to assume-only, so on a v4 account every
+ * call below signed by it was refused and the host's residual cleanup silently did nothing
+ * (found certifying AuditPoppy, 2026-09-10 — this file had missed the v4 migration). The
+ * session's HostResidualCleanup statement (maintenance.ts) IS this gateway's action set; on
+ * a pre-v4 account the session falls back to the operator key, so nothing changes there.
+ */
 export function sdkDeletionGateway(): DeletionGateway {
   return {
     async getTags(region, arn) {
-      const credentials = await operatorCredentials();
+      const credentials = await maintenanceCredentials();
       const id = resourceIdFromArn(arn, resourceTypeFromArn(arn));
       // Live per-service tag reads — the tagging INDEX (which produced the sweep
       // candidates) is eventually consistent, so re-querying it would mostly re-read
@@ -255,7 +263,7 @@ export function sdkDeletionGateway(): DeletionGateway {
       const { S3Client, ListObjectVersionsCommand, DeleteObjectsCommand, DeleteBucketCommand } = await import(
         "@aws-sdk/client-s3"
       );
-      const s3 = new S3Client({ region, credentials: await operatorCredentials() });
+      const s3 = new S3Client({ region, credentials: await maintenanceCredentials() });
       // Drain every object version + delete marker (works for unversioned buckets too:
       // they report one "null" version per key), then delete the bucket itself. Unlike
       // the stack-delete path's best-effort emptyBucket, failures here PROPAGATE:
@@ -294,7 +302,7 @@ export function sdkDeletionGateway(): DeletionGateway {
 
     async deleteTable(region, tableName) {
       const { DynamoDBClient, DeleteTableCommand, UpdateTableCommand } = await import("@aws-sdk/client-dynamodb");
-      const ddb = new DynamoDBClient({ region, credentials: await operatorCredentials() });
+      const ddb = new DynamoDBClient({ region, credentials: await maintenanceCredentials() });
       try {
         await ddb.send(new DeleteTableCommand({ TableName: tableName }));
       } catch (err) {
@@ -309,7 +317,7 @@ export function sdkDeletionGateway(): DeletionGateway {
     async deleteUserPool(region, poolId) {
       const { CognitoIdentityProviderClient, DescribeUserPoolCommand, DeleteUserPoolDomainCommand, DeleteUserPoolCommand } =
         await import("@aws-sdk/client-cognito-identity-provider");
-      const cognito = new CognitoIdentityProviderClient({ region, credentials: await operatorCredentials() });
+      const cognito = new CognitoIdentityProviderClient({ region, credentials: await maintenanceCredentials() });
       // A hosted-UI domain blocks pool deletion — remove it first when present.
       try {
         const pool = await cognito.send(new DescribeUserPoolCommand({ UserPoolId: poolId }));
@@ -323,26 +331,26 @@ export function sdkDeletionGateway(): DeletionGateway {
 
     async deleteFunction(region, functionName) {
       const { LambdaClient, DeleteFunctionCommand } = await import("@aws-sdk/client-lambda");
-      const lambda = new LambdaClient({ region, credentials: await operatorCredentials() });
+      const lambda = new LambdaClient({ region, credentials: await maintenanceCredentials() });
       await lambda.send(new DeleteFunctionCommand({ FunctionName: functionName }));
     },
 
     async deleteLogGroup(region, logGroupName) {
       const { CloudWatchLogsClient, DeleteLogGroupCommand } = await import("@aws-sdk/client-cloudwatch-logs");
-      const logs = new CloudWatchLogsClient({ region, credentials: await operatorCredentials() });
+      const logs = new CloudWatchLogsClient({ region, credentials: await maintenanceCredentials() });
       await logs.send(new DeleteLogGroupCommand({ logGroupName }));
     },
 
     async deleteSesIdentity(region, identity) {
       const { SESClient, DeleteIdentityCommand } = await import("@aws-sdk/client-ses");
-      const ses = new SESClient({ region, credentials: await operatorCredentials() });
+      const ses = new SESClient({ region, credentials: await maintenanceCredentials() });
       await ses.send(new DeleteIdentityCommand({ Identity: identity }));
     },
 
     async deleteReceiptRuleSet(region, ruleSetName) {
       const { SESClient, DescribeActiveReceiptRuleSetCommand, SetActiveReceiptRuleSetCommand, DeleteReceiptRuleSetCommand } =
         await import("@aws-sdk/client-ses");
-      const ses = new SESClient({ region, credentials: await operatorCredentials() });
+      const ses = new SESClient({ region, credentials: await maintenanceCredentials() });
       // SES refuses to delete the ACTIVE rule set — clear the active slot first if it's ours.
       try {
         const active = await ses.send(new DescribeActiveReceiptRuleSetCommand({}));

@@ -31,12 +31,20 @@ function inTauri(): boolean {
 
 /**
  * Check the feed once. Resolves null when up to date, not running under Tauri,
- * offline, or the feed has no entry for this platform (e.g. a Store-managed
- * install whose updates come from the Store) — a failed check must never nag.
+ * offline, the install cannot update itself in place, or the feed has no entry for
+ * this platform (e.g. a Store-managed install whose updates come from the Store) —
+ * a failed check must never nag.
  */
 export async function checkForSelfUpdate(): Promise<AvailableUpdate | null> {
   if (!inTauri()) return null;
   try {
+    // A packaged Linux install (.deb, or agentspoppy-bin from the AUR) lives in
+    // root-owned /usr/bin with no AppImage to swap, so the update could only fail —
+    // and the package manager owns updates there. Ask the host before checking, so
+    // those users are never shown a banner that cannot work.
+    const { invoke } = await import("@tauri-apps/api/core");
+    if (!(await invoke<boolean>("self_update_supported"))) return null;
+
     const { check } = await import("@tauri-apps/plugin-updater");
     const update = await check();
     if (!update) return null;

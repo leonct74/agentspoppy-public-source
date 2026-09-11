@@ -26,5 +26,7 @@ export default defineConfig({
   clearScreen: false,
   test: {
     environment: "jsdom",
+    // Stubs the jsdom gaps that would otherwise surface as unhandled errors (test-setup.ts).
+    setupFiles: ["./src/test-setup.ts"],
   },
 });

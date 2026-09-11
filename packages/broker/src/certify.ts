@@ -22,7 +22,7 @@
  * providers. The CLI wires the real AWS-backed providers and does the printing/signing.
  */
 import { createHash } from "node:crypto";
-import type { CertificationReport, CertificationSubject, LeaveNoTraceCertificate } from "@agentspoppy/core";
+import type { CertificationReport, CertificationSubject, LeaveNoTraceCertificate, ResidualResource } from "@agentspoppy/core";
 import type { ExtensionManifest } from "@agentspoppy/extension-sdk";
 import type { BrokerService } from "./service";
 import type { ExtensionRegistry } from "./extensions";
@@ -66,6 +66,16 @@ export interface CertifyDeps {
   verifier?: ExistenceVerifier;
   /** Injectable clock for deterministic tests. */
   now?: () => string;
+  /**
+   * How long to wait for a lagging tag index BEFORE teardown, when CloudFormation says stacks
+   * stand but the sweep sees nothing: re-sweep `attempts` times, `delayMs` apart. Defaults to
+   * six tries twenty seconds apart (about two minutes). Injectable for tests.
+   */
+  warmUp?: { attempts: number; delayMs: number };
+  /** Injectable sleep, so the warm-up is instant under test. */
+  sleep?: (ms: number) => Promise<void>;
+  /** Called before each warm-up wait — the CLI prints progress with it, since a wait can be long. */
+  onWarmUp?: (attempt: number, attempts: number) => void;
 }
 
 export interface CertifyOptions {
@@ -97,7 +107,65 @@ export async function runCertification(deps: CertifyDeps, opts: CertifyOptions):
 
   // 1. Footprint BEFORE — what this poppy currently has tagged. A teardown that removes
   //    nothing proves nothing, so an empty footprint is recorded as a warning (not a pass-blocker).
-  const footprintBefore = await service.getResiduals(conn.id).catch(() => []);
+  //
+  //    But the sweep can also be BLIND: the Resource Groups Tagging index is eventually
+  //    consistent, and on 2026-09-10 it answered "0" for AuditPoppy while a live, fully tagged
+  //    stack stood — and the run still certified, because `residualsAfter` comes from the SAME
+  //    sweep and a sweep that answers 0 for a standing stack answers 0 for anything. So the
+  //    harness asks CloudFormation what stands (a different system, not the index): stacks up
+  //    but nothing tagged means the index has not caught up. It waits for it, re-sweeping a few
+  //    times; if the sweep never sees the stack, the run is UNVERIFIED — not a failure of the
+  //    poppy, not a pass either, and no certificate.
+  const unverified: string[] = [];
+  let sweepBeforeFailed = false;
+  const sweepBefore = () =>
+    service.getResiduals(conn.id).catch(() => {
+      sweepBeforeFailed = true;
+      return [] as ResidualResource[];
+    });
+  let footprintBefore = await sweepBefore();
+  // What CloudFormation says stands — asked whenever the sweep is empty, so the report shows
+  // both systems side by side. `null` = the question itself could not be answered.
+  let stacksStanding: string[] | null | undefined;
+  let blindBefore = false;
+  if (footprintBefore.length === 0) {
+    try {
+      stacksStanding = (await service.getInventory(conn.id)).stacks
+        .filter((s) => s.stackExists)
+        .map((s) => s.stackName);
+    } catch (e) {
+      // FAIL CLOSED. Three AuditPoppy runs certified through this branch (2026-09-10/11): the
+      // read failed, was caught into "nothing stands", the warm-up was skipped, and the blind
+      // sweep certified — the very shape this block exists to eliminate. "I could not tell what
+      // stands" is grounds for unverified, never for a pass.
+      stacksStanding = null;
+      blindBefore = true;
+      unverified.push(
+        `Could not read what stands from CloudFormation (${e instanceof Error ? e.message : String(e)}) while the ` +
+          `tag sweep saw nothing before teardown — so this run cannot tell whether the sweep was blind, and ` +
+          `"0 residual" after teardown is not evidence. Fix the read, then run certify again.`,
+      );
+    }
+    if (stacksStanding && stacksStanding.length > 0) {
+      const warmUp = deps.warmUp ?? { attempts: 6, delayMs: 20_000 };
+      const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+      for (let i = 0; i < warmUp.attempts && footprintBefore.length === 0; i++) {
+        deps.onWarmUp?.(i + 1, warmUp.attempts);
+        await sleep(warmUp.delayMs);
+        footprintBefore = await sweepBefore();
+      }
+      if (footprintBefore.length === 0) {
+        blindBefore = true;
+        unverified.push(
+          `The tag sweep saw nothing before teardown while ${stacksStanding.length} stack(s) stood (${stacksStanding.join(", ")}) — ` +
+            (sweepBeforeFailed ? "it could not be read, or " : "") +
+            `the tag index had not caught up. A sweep that answers 0 for a standing stack answers 0 for anything, ` +
+            `so "0 residual" after teardown is not evidence this run. Run certify again once the index is warm ` +
+            `(--wait-for-index lets it wait longer).`,
+        );
+      }
+    }
+  }
 
   // 2+3. The real teardown: run the declared out-of-stack cleanup hook (if any) then delete
   //    stacks (emptying buckets / deactivating SES as needed). The hook runs INSIDE
@@ -109,7 +177,30 @@ export async function runCertification(deps: CertifyDeps, opts: CertifyOptions):
   // 4. After teardown, the generic tag sweep — anything still tagged is a leftover candidate.
   //    hostCleanup is OFF: certification measures the POPPY's own leaves-no-trace compliance,
   //    and the host's deletion backstop must not paper over a non-compliant poppy.
-  const { deletedStacks, residuals: rawResiduals } = await service.teardown(conn.id, { runHook, hostCleanup: false });
+  const {
+    deletedStacks,
+    residuals: rawResiduals,
+    cleanupAuthProblem,
+  } = await service.teardown(conn.id, { runHook, hostCleanup: false });
+  // The twin of the blind sweep above: a sweep AFTER teardown that could not be read comes
+  // back as an empty list with `cleanupAuthProblem` set (service.teardown never lets a denied
+  // sweep read as "clean" in the UI); the certificate must not either.
+  if (cleanupAuthProblem) {
+    unverified.push(
+      `The sweep after teardown could not be read in at least one region (denied or failed), so "0 residual" ` +
+        `is not evidence this run. Fix the account's read access, then run certify again.`,
+    );
+  }
+  // First-hand proof, independent of every read above: if the harness itself deleted stacks,
+  // something stood — and a sweep that saw nothing before was blind, whatever CloudFormation
+  // said or failed to say. This is the rule that holds when everything else lies.
+  if (!blindBefore && footprintBefore.length === 0 && deletedStacks.length > 0) {
+    unverified.push(
+      `The tag sweep saw nothing before teardown, yet teardown deleted ${deletedStacks.length} stack(s) ` +
+        `(${deletedStacks.join(", ")}) — first-hand proof the sweep was blind, so "0 residual" after teardown is ` +
+        `not evidence this run. Run certify again once the tag index is warm (--wait-for-index lets it wait longer).`,
+    );
+  }
 
   // Confirm each candidate exists before it counts against the poppy: the tag index is
   // eventually consistent and can list a resource long after it's deleted, so a raw hit is
@@ -156,9 +247,12 @@ export async function runCertification(deps: CertifyDeps, opts: CertifyOptions):
     deletedStacks,
     residualsAfter,
     teardownHookRun,
-    passed: residualsAfter.length === 0,
+    // Clean AND testable. An unverified run is not a pass: nothing was proven either way.
+    passed: residualsAfter.length === 0 && unverified.length === 0,
     problems,
     warnings,
+    unverified,
+    ...(stacksStanding !== undefined ? { stacksStanding } : {}),
     ranAt: now(),
   };
 }
@@ -182,6 +276,12 @@ export interface IssueOptions {
  * `sign` is stable, so the platform's signature is reproducible/verifiable.
  */
 export function issueCertificate(report: CertificationReport, opts: IssueOptions = {}): LeaveNoTraceCertificate {
+  if (report.unverified.length > 0) {
+    throw new Error(
+      "cannot issue a leaves-no-trace certificate for an unverified report — the run could not tell " +
+        `whether anything was left: ${report.unverified.join(" ")}`,
+    );
+  }
   if (!report.passed) {
     throw new Error(
       "cannot issue a leaves-no-trace certificate for a failed report — " +

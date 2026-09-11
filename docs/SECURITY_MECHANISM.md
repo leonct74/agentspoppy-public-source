@@ -62,8 +62,17 @@ granted via `tagged-as-self`; it must use name-scoping (I2's second form).
 CloudFormation stack-tag propagation and transitive session tags, the app's entire
 footprint is discoverable by one tag query — which is exactly what teardown and the
 `certify` (leaves-no-trace) harness sweep. Teardown completeness is certified against a
-real deploy/use/teardown cycle, with the host's cleanup backstop OFF.
-*Pinned by:* `certify.ts` / `runCertification` (residuals must be zero).
+real deploy/use/teardown cycle, with the host's cleanup backstop OFF. The sweep must also be
+able to TELL: a run whose tag sweep saw nothing before teardown while CloudFormation said
+stacks stood (the tag index had not caught up), or whose sweep after teardown could not be
+read, is **unverified** — neither a pass nor a failure, and no certificate is issued on it;
+the harness waits for the index (re-sweeping about two minutes) before giving up.
+The blindness test fails CLOSED: a CloudFormation read that cannot be answered is itself
+unverified, never "nothing stands"; and independently of every read, a run whose own teardown
+deleted stacks after a sweep that saw nothing is unverified by first-hand proof.
+*Pinned by:* `certify.ts` / `runCertification` (residuals must be zero, and the sweep must
+have been able to see the standing stack — `report.unverified` empty; `issueCertificate`
+refuses otherwise).
 
 **I5 — Ownership pinned to the app, not the connection.** Conditions use the stable
 `agentspoppy:app` tag, never the ephemeral connection id: connections are superseded on
@@ -326,6 +335,17 @@ boundary; it changes the operator user and the role's trust policy only:
   every use now passes the guarded door and is bounded by I1 (narrowing-only) like any other
   session. What remains on the user: assume the broker role, `GetCallerIdentity`, and
   `SelfRevoke`.
+- **Who signs with what (pinned 2026-09-10, `maintenance.test.ts` "who signs with the raw
+  operator key").** On the maintenance session: `cloudformation.ts` (stacks, bucket drains,
+  SES), `tagging.ts` (the leaves-no-trace sweep), `deletion.ts` (the residual cleanup),
+  `existence.ts`, `cloudtrail.ts`. On the raw operator key, deliberately: `sts.ts` (the
+  vend's hop 1 — the key's retained v4 power) and `identity.ts` (GetCallerIdentity — the probe
+  that says whose key this is); `maintenance.ts` itself mints the session from the key; and
+  `bootstrap.ts`'s setup gateway on its write side (a role session may not apply the stack
+  that defines the role — elevated keys, or the operator key on pre-v4), while its read side
+  (the version check) already arrives through the session, passed in by `identity.ts`. The
+  list exists because `tagging.ts` and `deletion.ts` had missed the v4 migration
+  unnoticed for twelve days — see §7, 2026-09-10 (eleventh window).
 - **`SelfRevoke` — the kill switch.** The operator may delete *its own* access key and
   nothing else. Self-DoS only: no `iam:CreateAccessKey` is granted anywhere, so a revoked
   key can never be replaced except by re-running setup with elevated credentials. It is a
@@ -373,6 +393,78 @@ reader catching the trick. Authority for the one exemption sits on the listing
 gated at all.
 
 ## 7. Change history
+- **2026-09-11 (the blindness guard fails closed — twelfth approved window)** — found by the
+  AuditPoppy session: three certify runs on `main` printed `footprint before: 0` and then
+  `✓ CERTIFIED`, the last with the stack standing 98 minutes and the poppy clean by hand. The
+  tenth window's guard asked CloudFormation what stands, but caught a failed read into `[]`
+  — "I could not tell what stands" became "nothing stands", the warm-up was skipped, and the
+  blind sweep certified: the shape that window was written to eliminate, reappearing inside
+  it. Also learned: the account's Resource Groups Tagging index lags past ninety minutes (the
+  before-sweep saw 0 with a tagged stack standing; the after-sweep saw 2 only as they went
+  away), so a two-minute warm-up cannot rescue it. Change, I4 only, strengthened: (1) FAIL
+  CLOSED — a CloudFormation read that cannot be answered is unverified, with the error in the
+  message, never `[]`; (2) FIRST-HAND — independent of every read, if the harness's own
+  teardown deleted stacks after a sweep that saw nothing, the sweep was blind and the run is
+  unverified; (3) `report.stacksStanding` (core types; `null` = could not be read) and the CLI
+  print what CloudFormation saw beside what the sweep saw; (4) `--wait-for-index <minutes>`
+  lets a developer on a slow account wait for the index (with progress) so the run becomes
+  evidence instead of coming back unverified — waiting is honest, re-running blind is not.
+  Tests: a failing inventory read is unverified and waits for nothing; the first-hand rule
+  fires when the inventory said "nothing" and teardown deleted a stack; a longer wait is
+  honoured and reported, and a still-blind run is unverified once, not twice. I1, I2, I3,
+  I5, I6 untouched; `assessGrant` not involved; create-verb filter unchanged. Broker suite as
+  on `main` (the five pre-existing environment failures aside); `tsc -b` clean. Ported to
+  `memory-contract` in the same window; ships in 0.3.20 with the teardown fixes. Noted for a
+  later window: a harness that records the stack's own resource list before teardown and
+  confirms each resource gone afterwards would not depend on the tag index at all.
+- **2026-09-10 (the sweep and the cleanup sign with the maintenance session — eleventh
+  approved window)** — found by AuditPoppy's certification right after the tenth window: the
+  run came back UNVERIFIED because "the sweep after teardown could not be read in at least one
+  region" — and in the same run, against the same account, `cloudformation.ts` on
+  `maintenanceCredentials()` deleted the stack while `tagging.ts` on `operatorCredentials()`
+  was refused in every region. Template v4 (2026-08-29) stripped the operator key to
+  assume-only and `docs/specs/operator-key-least-privilege.md` named the six consumers to
+  move to the session; `tagging.ts` and `deletion.ts` never moved, still carrying "like the
+  CloudFormation provider" after that provider had. Consequence on every v4 account since
+  v4: the leaves-no-trace sweep blind (I4's audit) and the host's residual cleanup silently a
+  no-op (I4's backstop, I2's "the host acts on what carries the tag") — and, until the tenth
+  window, a blind sweep still certified. Change: nine call sites (one in `tagging.ts`, eight in
+  `deletion.ts`) switch to `maintenanceCredentials()`, exactly as `cloudformation.ts` does —
+  a narrowing: on v4 the calls pass the guarded door under the session policy written FOR
+  them (`tag:GetResources` in MonitorAndTeardown; HostResidualCleanup IS deletion.ts's action
+  set); on a pre-v4 account the session falls back to the operator key, so nothing changes.
+  I4 and I2 restored, not altered; I1, I3, I5, I6 untouched; `assessGrant` not involved; the
+  create-verb filter unchanged. Tripwire: `maintenance.test.ts` "who signs with the raw
+  operator key" scans `aws/*.ts` and pins the callers to `sts.ts`, `identity.ts`,
+  `maintenance.ts` and `bootstrap.ts` (its write side; the read side already takes the
+  session) — the list §6.1.1 now carries; verified red by reverting one call. Full broker suite as on `main` (the five
+  pre-existing environment failures aside); a real certify run on AuditPoppy is owed by its
+  session. Ported to `memory-contract` in the same window.
+- **2026-09-10 (a blind sweep is not a clean bill — tenth approved window)** — found by
+  AuditPoppy's certification: `footprint before: 0` while a live, fully tagged stack stood,
+  because the Resource Groups Tagging index had not caught up — and the run still issued
+  `✓ CERTIFIED`, since `residualsAfter` comes from the same sweep and a sweep that answers 0
+  for a standing stack answers 0 for anything. The existing no-op warning could not catch it
+  (it fires only when no stack was deleted, i.e. exactly not this case). Change, I4 only,
+  and it strengthens it: before teardown the harness asks CloudFormation what stands
+  (`getInventory`, a different system from the index); stacks up with nothing tagged means
+  the index is cold, so it re-sweeps up to six times twenty seconds apart; if the sweep never
+  sees the stack the run is **unverified**. Same for a sweep after teardown that could not be
+  read (`cleanupAuthProblem`), which used to come back as an empty list and pass.
+  `CertificationReport.unverified` (core types) carries the reasons; `passed` now requires
+  it empty; `issueCertificate` refuses an unverified report; the CLI prints `? UNVERIFIED —
+  no certificate` and exits 2 (0 certified, 1 failed). Deliberately not a plain warning: a
+  warning under a green line is what got accepted as proof; and deliberately not a failure
+  of the poppy: a cold index is not its fault, and the honest instruction is "run it again
+  once the index is warm", which is not "re-run until green" because this outcome is not
+  green. AWS only — Cloud Asset Inventory does not lag this way, and an empty Google project
+  legitimately sweeps to nothing. Nothing that failed before passes now; the empty-account
+  no-op still only warns (nothing stood, so nothing was blind). Tests: the blind sweep is
+  unverified and waits three times; a warming index is re-swept until it answers, then
+  verifies; an empty account does not wait; an unreadable sweep after teardown is unverified;
+  `issueCertificate` throws on both. I1, I2, I3, I5, I6 untouched (no compilation, tagging,
+  vending or rating involved; create-verb filter unchanged). Full broker suite green; a real
+  certify run on AuditPoppy is owed by its session, whose report started this.
 
 - **2026-08-29 (operator key least privilege — template v4)** — the operator IAM user was two
   independent powers: assume the broker role (guarded), *and* a direct account-wide
